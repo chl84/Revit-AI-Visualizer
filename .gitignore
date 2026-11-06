@@ -1,0 +1,51 @@
+# Local tooling and machine-specific configuration
+.idea/
+.vscode/
+.fleet/
+.agents/
+.codex/
+.aws/
+*.iml
+local.properties
+gradle.properties.local
+
+# Build output and caches
+.gradle/
+.kotlin/
+**/build/
+captures/
+.cxx/
+.externalNativeBuild/
+
+# Credentials, signing, environment files, and logs
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+*.pem
+*.p12
+*.log
+*.hprof
+
+# Private project material and local requirements
+promt.md
+local-images/
+test-images/
+private/
+exports/
+*.rvt
+*.rfa
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.heic
+*.heif
+*.ndjson
+
+# Desktop files
+.DS_Store
+Thumbs.db
