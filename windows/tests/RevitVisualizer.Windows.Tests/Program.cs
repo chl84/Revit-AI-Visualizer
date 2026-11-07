@@ -16,8 +16,9 @@ internal static class Program
     public static int Main(string[] args)
     {
         RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
-        var application = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-        application.InitializeComponent(); application.StartupUri = null!;
+        var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        application.Resources.MergedDictionaries.Add(new ResourceDictionary
+        { Source = new Uri("pack://application:,,,/Revit-AI-Visualizer;component/Theme.xaml", UriKind.Absolute) });
         application.DispatcherUnhandledException += (_, e) => { Console.Error.WriteLine(e.Exception.GetType().Name); e.Handled = true; application.Shutdown(1); };
         application.Startup += async (_, _) =>
         {

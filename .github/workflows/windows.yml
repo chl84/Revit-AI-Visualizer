@@ -6,10 +6,12 @@ on:
     paths:
       - 'windows/**'
       - '.github/workflows/windows.yml'
+      - 'app/src/main/java/com/revitvisualizer/app/openai/ArchitecturePrompt.kt'
   pull_request:
     paths:
       - 'windows/**'
       - '.github/workflows/windows.yml'
+      - 'app/src/main/java/com/revitvisualizer/app/openai/ArchitecturePrompt.kt'
   workflow_dispatch:
 
 permissions:

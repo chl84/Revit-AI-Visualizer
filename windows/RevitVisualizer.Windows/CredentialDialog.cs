@@ -14,6 +14,7 @@ public sealed class CredentialDialog : Window
     public bool Remember => remember.IsChecked == true;
     public CredentialDialog()
     {
+        Style = (Style)FindResource(typeof(Window));
         Title = "OpenAI API key"; Width = 480; SizeToContent = SizeToContent.Height;
         ResizeMode = ResizeMode.NoResize; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var panel = new StackPanel { Margin = new Thickness(24) };
