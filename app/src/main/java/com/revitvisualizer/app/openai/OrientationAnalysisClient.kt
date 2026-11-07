@@ -33,13 +33,15 @@ import org.json.JSONObject
 /** A separate, bounded text-analysis request. No tools, generated images, retries or response storage. */
 class OrientationAnalysisClient(
     client: OkHttpClient = OpenAiImages.secureClient(),
-    private val timeoutMillis: Long = TimeUnit.MINUTES.toMillis(2),
+    // A non-streamed answer arrives only after all reasoning and output tokens are generated.
+    private val timeoutMillis: Long = TimeUnit.MINUTES.toMillis(5),
 ) {
     private val http = client.newBuilder()
         .callTimeout(timeoutMillis, TimeUnit.MILLISECONDS).readTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
         .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
 
     suspend fun analyze(input: LocalImage, guide: LocalImage, credential: CharArray, environment: ResolvedEnvironment): SceneOrientation {
+        require(environment.usesSolarOrientation)
         require(timeoutMillis > 0)
         if (credential.isEmpty() || credential.any { it.code !in 33..126 }) throw error("Enter a valid API key.")
         if (guide.width !in 1..1600 || guide.height !in 1..1600 || guide.file.length() > MAX_IMAGE_BYTES) {
@@ -57,18 +59,21 @@ class OrientationAnalysisClient(
             }
             if (clean.size > MAX_IMAGE_BYTES) throw error("The image preview exceeds the analysis size limit.")
             ensureActive()
+            val clientRequestId = UUID.randomUUID().toString()
             val request = Request.Builder().url(ENDPOINT)
                 .header("Authorization", "Bearer ${String(credential)}")
-                .header("X-Client-Request-Id", UUID.randomUUID().toString())
+                .header("X-Client-Request-Id", clientRequestId)
                 .post(body(clean, guide, environment)).build()
             suspendCancellableCoroutine { continuation ->
                 val call = http.newCall(request)
                 continuation.invokeOnCancellation { call.cancel() }
                 call.enqueue(object : Callback {
                     override fun onFailure(call: Call, e: IOException) {
-                        if (continuation.isActive) continuation.resumeWithException(error("The orientation analysis connection failed or timed out."))
+                        if (continuation.isActive) continuation.resumeWithException(withRequestIds(
+                            error("The orientation analysis connection failed or timed out."), clientRequestId, null))
                     }
                     override fun onResponse(call: Call, response: Response) {
+                        val serverRequestId = response.header("x-request-id")?.takeIf { it.matches(Regex("req_[A-Za-z0-9_-]{1,96}")) }
                         try {
                             val result = response.use {
                                 if (!it.isSuccessful) throw error(when (it.code) {
@@ -84,18 +89,19 @@ class OrientationAnalysisClient(
                             }
                             if (continuation.isActive) continuation.resume(result)
                         } catch (failure: Exception) {
-                            if (continuation.isActive) continuation.resumeWithException(
-                                if (failure is ImageApiException) failure else error("OpenAI did not return a complete, valid orientation analysis."))
+                            if (continuation.isActive) continuation.resumeWithException(withRequestIds(
+                                if (failure is ImageApiException) failure else error("OpenAI did not return a complete, valid orientation analysis."),
+                                clientRequestId, serverRequestId))
                         }
                     }
                 })
             }
-        } ?: throw error("The orientation analysis exceeded its two-minute waiting limit.")
+        } ?: throw error("The orientation analysis exceeded its ${TimeUnit.MILLISECONDS.toSeconds(timeoutMillis)}-second waiting limit.")
     }
 
     private fun body(clean: ByteArray, guide: LocalImage, environment: ResolvedEnvironment): RequestBody {
         val settings = JSONObject().put("model", MODEL).put("store", false).put("stream", false)
-            .put("reasoning", JSONObject().put("effort", "medium")).put("max_output_tokens", 4000)
+            .put("reasoning", JSONObject().put("effort", "medium")).put("max_output_tokens", MAX_OUTPUT_TOKENS)
             .put("instructions", INSTRUCTIONS)
             .put("text", JSONObject().put("format", JSONObject().put("type", "json_schema")
                 .put("name", "scene_orientation").put("strict", true).put("schema", schema())))
@@ -121,21 +127,63 @@ class OrientationAnalysisClient(
 
     companion object {
         const val MODEL = "gpt-5.4-mini"
+        // This budget covers reasoning as well as the final structured answer.
+        internal const val MAX_OUTPUT_TOKENS = 12_000
         private const val ENDPOINT = "https://api.openai.com/v1/responses"
         private const val MAX_IMAGE_BYTES = 12 * 1024 * 1024
         private const val MAX_RESPONSE_BYTES = 256 * 1024
         private fun error(message: String) = ImageApiException("$message No image generation was requested. A submitted analysis may still be billed. No automatic retry was made.")
 
+        private fun withRequestIds(failure: ImageApiException, clientId: String, serverId: String?): ImageApiException =
+            ImageApiException(failure.message + "\nAnalysis client request ID: $clientId." +
+                (serverId?.let { "\nOpenAI analysis request ID: $it." } ?: ""))
+
+        /** Only known enums and bounded numeric usage enter diagnostics, never model/server prose. */
+        private fun diagnostics(response: JSONObject, code: String): String {
+            fun known(value: String, allowed: Set<String>) = value.takeIf { it in allowed } ?: "unknown"
+            fun count(row: JSONObject?, key: String): Long? {
+                val value = row?.opt(key) as? Number ?: return null
+                val number = value.toDouble()
+                return if (number.isFinite() && number in 0.0..1_000_000.0 && number == kotlin.math.floor(number)) number.toLong() else null
+            }
+            val status = known(response.optString("status"), setOf("completed", "incomplete", "failed", "cancelled", "queued", "in_progress"))
+            val reason = known(response.optJSONObject("incomplete_details")?.optString("reason").orEmpty(),
+                setOf("max_output_tokens", "content_filter", "max_messages", "steered"))
+            val apiCode = known(response.optJSONObject("error")?.optString("code").orEmpty(),
+                setOf("server_error", "rate_limit_exceeded", "insufficient_quota", "invalid_api_key", "invalid_prompt", "content_policy_violation"))
+            val usage = response.optJSONObject("usage")
+            return buildString {
+                append("\n\nDiagnostic: $code. Response status: $status.")
+                if (status == "incomplete") append(" Reason: $reason.")
+                if (!response.isNull("error")) append(" API error code: $apiCode.")
+                count(usage, "output_tokens")?.let { append(" Output tokens: $it.") }
+                count(usage?.optJSONObject("output_tokens_details"), "reasoning_tokens")?.let { append(" Reasoning tokens: $it.") }
+                append(" Requested output budget: $MAX_OUTPUT_TOKENS tokens.\n")
+            }
+        }
+
         internal fun parseResponse(response: JSONObject): SceneOrientation {
+            if (response.optString("status") == "incomplete") {
+                val (code, description) = when (response.optJSONObject("incomplete_details")?.optString("reason")) {
+                    "max_output_tokens" -> "ANALYSIS_OUTPUT_LIMIT" to "OpenAI reached the orientation-analysis output budget before completing the answer. This budget includes internal reasoning tokens."
+                    "content_filter" -> "ANALYSIS_CONTENT_FILTER" to "OpenAI stopped the orientation analysis because of a content filter."
+                    else -> "ANALYSIS_INCOMPLETE" to "OpenAI returned an incomplete orientation analysis."
+                }
+                throw error(description + diagnostics(response, code))
+            }
             if (response.optString("status") != "completed" || !response.isNull("error")) {
-                throw error("OpenAI did not complete the orientation analysis.")
+                val code = if (!response.isNull("error") || response.optString("status") == "failed") "ANALYSIS_API_ERROR" else "ANALYSIS_NOT_COMPLETED"
+                throw error("OpenAI did not complete the orientation analysis." + diagnostics(response, code))
             }
             val output = response.getJSONArray("output")
             val texts = mutableListOf<String>()
             for (i in 0 until output.length()) {
                 val item = output.getJSONObject(i)
                 if (item.optString("type") != "message") continue
-                require(item.getString("role") == "assistant" && item.getString("status") == "completed")
+                require(item.getString("role") == "assistant")
+                if (item.optString("status") != "completed") {
+                    throw error("OpenAI did not finish the analysis message." + diagnostics(response, "ANALYSIS_MESSAGE_INCOMPLETE"))
+                }
                 val content = item.getJSONArray("content")
                 for (j in 0 until content.length()) {
                     val part = content.getJSONObject(j)
@@ -145,7 +193,12 @@ class OrientationAnalysisClient(
                 }
             }
             require(texts.size == 1 && texts.single().length <= 12_000)
-            val result = SceneOrientation.parse(JSONObject(texts.single()))
+            val result = try {
+                SceneOrientation.parse(JSONObject(texts.single()))
+            } catch (_: Exception) {
+                // Never echo the rejected model text; report only the safe diagnostic fields.
+                throw error("OpenAI returned an orientation analysis the app could not use." + diagnostics(response, "ANALYSIS_INVALID_CONTENT"))
+            }
             if (!result.resolved) throw error("The image's north orientation was ambiguous. Adjust the arrow or use a clearer image.")
             return result
         }

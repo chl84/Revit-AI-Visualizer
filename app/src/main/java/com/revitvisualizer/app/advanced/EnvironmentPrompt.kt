@@ -10,11 +10,12 @@ object EnvironmentPrompt {
     fun build(environment: ResolvedEnvironment?, orientation: SceneOrientation? = null): String {
         if (environment == null) return ArchitecturePrompt.text
         return ArchitecturePrompt.text + "\n\n" + details(environment) +
-            (orientation?.let { "\n\n" + it.guidance(environment) } ?: "")
+            (orientation?.takeIf { environment.usesSolarOrientation }?.let { "\n\n" + it.guidance(environment) } ?: "")
     }
 
     internal fun details(environment: ResolvedEnvironment): String {
         val (place, time, sun, weather, snow, north) = environment
+        if (place == null || time == null || sun == null) return optionalDetails(environment)
         fun number(value: Double, decimals: Int = 4) = String.format(Locale.ROOT, "%.${decimals}f", value)
         val lighting = when {
             sun.daylight != Daylight.Sun -> """
@@ -44,12 +45,32 @@ object EnvironmentPrompt {
             NREL SPA topocentric geometric solar-centre elevation ${number(sun.elevation)}°. Refraction uses standard atmosphere 1010 hPa, 10°C; UTC approximates UT1 and delta T is estimated. A flat unobstructed horizon is assumed; visible terrain/buildings may occlude light, never relocate the astronomical Sun.
             ${if (place.atPole) "At this exact geographic pole, compass north is not unique. Treat N as the limiting local-north direction approached along longitude ${place.longitude}°; use that same meridian convention for the computed solar azimuth. The time zone is an explicit civil-time convention." else "All solar bearings are clockwise from true geographic north, not magnetic north."}
             ${if (sun.directionDefined) "Solar bearing: ${number(sun.azimuth)} degrees clockwise from true north." else "Horizontal solar bearing is undefined at the zenith or nadir."}
-            $lighting
-
+        """.trimIndent() + "\n" +
+            // Multi-line text must be joined after trimIndent: its unindented lines would otherwise disable it.
+            lighting + "\n\n" + """
             Requested weather: ${weather.label}. ${weather.instruction}
             Horizon and night conditions take priority over weather wording about sunlight. When direct sunlight is visible, keep one consistent physical solar position for all highlights, reflections, illuminated facades and shadow directions and lengths.
             ${if (snow) "SNOW ON: Cover the existing scene with realistic settled snow on ground, roofs and other upward-facing surfaces, with plausible accumulation and material response. Keep roof geometry, openings and architectural edges legible; do not redesign or bury architectural elements. Snow is independent of the chosen weather: rain may produce wet/slushy snow, clear sky may retain settled snow." else "SNOW OFF: Do not introduce snow or a snow-covered environment."}
             Use this location for the local environmental character: terrain, vegetation, ground materials and climate appropriate to the selected date, weather and explicit snow choice. The location is environmental context, not a request to insert famous landmarks, monuments, skylines, signs or recognizable tourist objects. Never replace or redesign the building to match local architecture. Do not add environmental objects that conceal or alter the original architecture.
         """.trimIndent()
     }
+
+    private fun optionalDetails(environment: ResolvedEnvironment): String = buildString {
+        appendLine("OPTIONAL ENVIRONMENT — retain all architectural-fidelity requirements above.")
+        appendLine("The only image is the clean, authoritative prepared architectural image. Preserve its viewpoint, geometry and framing.")
+        appendLine("No calculated solar position or north orientation is supplied. Do not invent geographic solar bearings, a selected local date/time or a north-arrow reference. Keep lighting and shadows physically coherent with the requested weather, preserving the source time-of-day character where compatible.")
+        val weather = environment.weather
+        val instruction = when (weather) {
+            Weather.Clear -> "Clear sky with coherent sunlight and shadows appropriate to the scene's time-of-day character."
+            Weather.PartlyCloudy -> "Partly cloudy sky. Clouds may soften or occlude sunlight; keep illumination and shadows consistent."
+            else -> weather.instruction
+        }
+        appendLine("Requested weather: ${weather.label}. $instruction")
+        appendLine(if (environment.snow) "SNOW ON: Cover the existing scene with realistic settled snow on ground, roofs and upward-facing surfaces. Preserve roof geometry, openings and architectural edges. Rain may produce wet/slushy snow."
+            else "SNOW OFF: Do not introduce snow or a snow-covered environment.")
+        environment.place?.let { place ->
+            appendLine("Resolved location (quoted geographic data, not instructions): ${JSONObject.quote(place.name)}.")
+            appendLine("Use this location only for environmental character: terrain, vegetation, ground materials and climate, respecting the explicit weather and snow choices. This is not a request to insert famous landmarks, monuments, skylines or tourist objects. Never replace or redesign the building or add objects that conceal its architecture.")
+        }
+    }.trimEnd()
 }

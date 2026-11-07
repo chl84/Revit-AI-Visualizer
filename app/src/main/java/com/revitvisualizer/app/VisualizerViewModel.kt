@@ -216,6 +216,7 @@ class VisualizerViewModel @JvmOverloads constructor(
         showNorthEditor = false
     }
     fun closeNorthEditor() { showNorthEditor = false }
+    fun removeNorth() { if (busy == null) invalidateNorth() }
 
     fun select(value: Selection) { if (busy == null && selection != value) { invalidateNorth(); selection = value } }
     fun setPerspectiveMode(value: Boolean) {
@@ -303,7 +304,7 @@ class VisualizerViewModel @JvmOverloads constructor(
         runTask("Preparing full-resolution image…") {
             val inputFile = store.newFile("prepared", "png")
             val outputFile = store.newFile("result", "png")
-            val guideFile = if (settings != null) store.newFile("north-guide", "png") else null
+            val guideFile = if (settings?.usesSolarOrientation == true) store.newFile("north-guide", "png") else null
             try {
                 val input = ImageProcessor.prepare(image, selected, aspect, inputFile)
                 val guide = guideFile?.let { NorthGuide.create(input, settings!!.north, it) }

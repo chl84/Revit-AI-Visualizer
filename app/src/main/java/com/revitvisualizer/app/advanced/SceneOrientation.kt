@@ -1,6 +1,7 @@
 package com.revitvisualizer.app.advanced
 
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import org.json.JSONArray
@@ -18,12 +19,13 @@ data class SceneSurface(val region: String, val normalAzimuth: Double?, val norm
 
     /** Eligibility is calculated locally from inferred normals, never taken from model prose. */
     fun directSun(environment: ResolvedEnvironment): String {
-        if (environment.sun.daylight != Daylight.Sun) return "No direct sunlight: Sun below horizon."
+        val sun = environment.sun ?: return "Solar position unavailable; do not invent a geographic lighting assignment."
+        if (sun.daylight != Daylight.Sun) return "No direct sunlight: Sun below horizon."
         if (environment.weather == Weather.Overcast || environment.weather == Weather.Rain) return "No hard direct sunlight: requested cloud cover."
         val azimuth = normalAzimuth ?: return "Surface orientation uncertain; do not invent a definite lighting assignment."
         val elevation = Math.toRadians(normalElevation!!)
-        val sunElevation = Math.toRadians(environment.sun.apparentElevation)
-        val incidence = cos(elevation) * cos(sunElevation) * cos(Math.toRadians(azimuth - environment.sun.azimuth)) +
+        val sunElevation = Math.toRadians(sun.apparentElevation)
+        val incidence = cos(elevation) * cos(sunElevation) * cos(Math.toRadians(azimuth - sun.azimuth)) +
             sin(elevation) * sin(sunElevation)
         return when {
             incidence < -0.02 -> "Back-facing the Sun: NO direct sunlight; diffuse sky light and reflections only."
@@ -63,10 +65,11 @@ data class SceneOrientation(
     }
 
     fun review(environment: ResolvedEnvironment): String = buildString {
+        val sun = requireNotNull(environment.sun)
         appendLine("AI interpretation of the scene; surface directions are estimates.")
-        appendLine("${environment.place.name} · ${environment.time}")
+        appendLine("${requireNotNull(environment.place).name} · ${environment.time}")
         appendLine(String.format(Locale.ROOT, "Calculated Sun: %.2f° from north, %.2f° elevation.",
-            environment.sun.azimuth, environment.sun.apparentElevation))
+            sun.azimuth, sun.apparentElevation))
         appendLine("North: $northInterpretation")
         appendLine("Sun: $sunSide")
         appendLine("Ground shadows: $shadowDirection")
@@ -90,12 +93,22 @@ data class SceneOrientation(
             require(status == "resolved" || status == "ambiguous")
             val rows = json.getJSONArray("surfaces")
             require(rows.length() <= 8)
+            // Normalize benign schema-valid variations instead of discarding an already billed analysis.
+            val surfaces = (0 until rows.length()).mapNotNull { index ->
+                val row = rows.getJSONObject(index)
+                val region = row.getString("region")
+                var azimuth = number(row, "normal_azimuth_degrees")
+                var elevation = number(row, "normal_elevation_degrees")
+                // A horizontal surface has no defined normal bearing; every bearing gives the same incidence.
+                if (azimuth == null && elevation != null && abs(elevation) >= 89.0) azimuth = 0.0
+                // One unpaired angle does not establish an orientation: treat the surface as unknown.
+                if ((azimuth == null) != (elevation == null)) { azimuth = null; elevation = null }
+                if (region.isBlank()) null
+                else SceneSurface(region, azimuth, elevation, Occlusion.valueOf(row.getString("occlusion")))
+            }.distinctBy { it.region.lowercase(Locale.ROOT) }
             return SceneOrientation(status == "resolved", json.getString("north_interpretation"),
-                json.getString("sun_side"), json.getString("shadow_direction"), (0 until rows.length()).map { index ->
-                    val row = rows.getJSONObject(index)
-                    SceneSurface(row.getString("region"), number(row, "normal_azimuth_degrees"),
-                        number(row, "normal_elevation_degrees"), Occlusion.valueOf(row.getString("occlusion")))
-                }, strings(json.getJSONArray("notes")))
+                json.getString("sun_side"), json.getString("shadow_direction"), surfaces,
+                strings(json.getJSONArray("notes")).filter { it.isNotBlank() })
         }
     }
 }

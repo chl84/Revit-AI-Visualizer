@@ -71,13 +71,14 @@ class OpenAiImages(
             throw ImageApiException("The prepared PNG exceeds the API's 50 MB input limit. Select a smaller area or import a smaller image.")
         }
         require(requestTimeoutMillis > 0)
-        require((environment == null) == (northGuide == null)) { "Advanced settings require an orientation guide." }
+        val usesSolarOrientation = environment?.usesSolarOrientation == true
+        require(usesSolarOrientation == (northGuide != null)) { "Solar orientation requires matching settings and an orientation guide." }
         if (northGuide != null && (northGuide.file.length() >= 50_000_000L || northGuide.file.canonicalFile == destination.canonicalFile)) {
             throw ImageApiException("The north arrow guide could not be prepared safely.")
         }
-        val orientation = if (environment != null) {
+        val orientation = if (usesSolarOrientation) {
             onProgress(ImageRequestPhase.AnalysingOrientation)
-            orientationClient.analyze(input, northGuide!!, credential, environment).also(onOrientationAnalysis)
+            orientationClient.analyze(input, northGuide!!, credential, environment!!).also(onOrientationAnalysis)
         } else null
         currentCoroutineContext().ensureActive()
         val trace = ImageRequestTrace(onProgress)

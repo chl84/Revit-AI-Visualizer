@@ -1,6 +1,88 @@
-# Vizruna — Android validation record, version 0.1.6
+# Vizruna — Android validation record, version 0.1.10
 
-## Two-stage Advanced orientation — source only, no new APK
+## Version 0.1.10 build after review fixes
+
+This APK includes the three completed review fixes: a five-minute orientation-analysis deadline with an accurate timeout message, normalization of selected schema-valid analysis variations with safe `ANALYSIS_INVALID_CONTENT` diagnostics for unusable content, and corrected multiline prompt indentation. Optional Advanced weather/snow behavior remains included; location and a confirmed north arrow are both required to trigger the analysis.
+
+- **All 75 local tests passed**, zero failures, errors or skips, including the three review regressions and existing default/partial/full Advanced request checks.
+- **All 18 instrumented tests passed on Stillword_Pixel**, Android 16 / API 36, zero failures or skips.
+- APK packaging and `lintDebug` passed. Lint reports zero errors and nineteen existing warnings. Version code is 11; application, signing and credential-storage identities remain unchanged. Windows remains paused.
+- Output: `app/build/outputs/apk/debug/Vizruna-0.1.10-debug.apk`, SHA-256 `4aea86f803fe86897e26a9f197df01b231e28b61631a5142a6552f86343d9841`.
+- The final APK was installed and launched through T3 device control on Stillword_Pixel; the capture screen was checked in landscape.
+
+The initial combined Gradle session was interrupted after APK packaging and the 75 local tests completed. Lint and connected Android tests were then run to successful completion separately:
+
+```sh
+./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug :app:connectedDebugAndroidTest
+./gradlew :app:lintDebug :app:connectedDebugAndroidTest
+```
+
+All API tests use local fixtures and placeholder credentials. No paid OpenAI request was made; real-model behavior and phone-network latency remain unverified.
+
+## Version 0.1.9 optional location and north arrow
+
+Advanced weather and snow no longer require a selected location or confirmed north arrow. A selected location alone supplies environmental character. An arrow alone is not sent. Only selecting both enables date/time validation, local solar calculation, the paid orientation analysis and its guide image. The simpler mode never invents computed bearings or a supplied date/time and sends exactly one clean image in one image-generation request. Advanced off retains the unchanged base prompt and default request. The UI explains these choices and supports removing either location or arrow. Cost text in the key dialog appears only when analysis will actually run.
+
+- **58 focused local tests passed**, with zero failures, errors or skips: all Advanced and OpenAI client/transport tests. New regressions cover all four weather choices, snow on/off, no location/arrow, location only, arrow only, absence of fabricated solar/guide instructions and exclusion of stale orientation guidance. Intercepted request tests verify one image POST, one clean image, no analysis callback/progress and unchanged source bytes for partial Advanced settings. Existing full-orientation/default-flow tests pass.
+- **All 18 instrumented tests passed on Stillword_Pixel**, Android 16 / API 36. The updated UI regression checks that full solar orientation still rejects an unresolved repeated DST time, accepts the selected offset, then reaches key entry after removing the arrow despite an unresolved offset. Removing the location and selecting rain/snow also reaches key entry. No key is submitted.
+- `lintDebug` passed with zero errors and nineteen existing warnings. Android test compilation and debug APK packaging passed. Version code is 10; package, signing and encrypted-key identities are unchanged. Windows remains paused.
+- The final APK was installed and launched through T3 device control; its capture screen was checked in landscape.
+- Output: `app/build/outputs/apk/debug/Vizruna-0.1.9-debug.apk`, SHA-256 `784ddcac9c730193c4fb11908c6b87ec2eb43ca32e7a58e44abb4d73e17352e9`.
+
+Executed successfully:
+
+```sh
+./gradlew :app:testDebugUnitTest --tests 'com.revitvisualizer.app.advanced.*' --tests 'com.revitvisualizer.app.openai.*' :app:lintDebug :app:compileDebugAndroidTestKotlin
+./gradlew :app:assembleDebug :app:connectedDebugAndroidTest
+```
+
+API checks use generated PNGs, local/intercepted responses and placeholder credentials. No paid OpenAI requests were made. Generated appearance and real-model behavior remain unverified.
+
+### 0.1.9 review fixes
+
+- The orientation-analysis deadline is raised from two to five minutes. The non-streamed answer arrives only after the 12000-token reasoning/output budget is spent, so the earlier deadline could expire on a billed analysis that needed the budget.
+- Schema-valid but benign variations no longer discard a billed analysis: an upward/downward horizontal normal without a bearing uses bearing 0 (incidence is identical), an unpaired angle becomes an unknown orientation, blank regions/notes are dropped and case-insensitive duplicate regions keep their first entry. A remaining unusable analysis reports `ANALYSIS_INVALID_CONTENT` with only the safe diagnostic fields.
+- Night and twilight environment text was left indented by 12 spaces on most lines, because the multi-line lighting block disabled `trimIndent()`. The lighting block is now joined after trimming.
+- **All 75 local tests passed** (three new regressions plus a deadline-message assertion). `lintDebug` reports zero errors and the nineteen existing warnings; `assembleDebug` passed. Instrumented tests were not rerun. No paid OpenAI request was made.
+
+## Version 0.1.8 incomplete orientation analysis
+
+The phone reported the earlier generic "OpenAI did not complete the orientation analysis" error. That client discarded the response's incomplete reason and usage, so the actual cause cannot be established from the message. The 4000-token cap was a concrete possible cause because it covered both hidden reasoning and final JSON. Version 0.1.8 raises that bounded cap to 12000, retains medium reasoning, and distinguishes output-limit, content-filter, failed and other incomplete responses. Diagnostics contain only known enums, bounded numeric usage and validated request IDs; arbitrary model/server prose and credentials are excluded. Incomplete analysis still prevents image generation, with no automatic retry or model fallback.
+
+- **All 70 local tests passed**, zero failures, errors or skips. New regressions cover incomplete responses with completed-looking messages, output/reasoning usage, known and unknown diagnostic fields, request-ID filtering and an incomplete assistant message under a completed response. The two-stage client also verifies that output-limited analysis sends no image-generation POST and creates no result.
+- **All 18 instrumented tests passed on Stillword_Pixel**, Android 16 / API 36. The new native regression checks `ANALYSIS_OUTPUT_LIMIT`, usage and request IDs, and verifies that no image-generation POST or output file follows the incomplete response.
+- `assembleDebug` and `lintDebug` passed, with zero lint errors and nineteen existing warnings. The final APK (version code 9) was installed and launched successfully through T3's device control; its capture screen was checked in landscape.
+- Output: `app/build/outputs/apk/debug/Vizruna-0.1.8-debug.apk`, SHA-256 `23fe72fb9f7234a749ae1b4f4f035c1c4e04956e47cfc706b365ed9168918390`.
+
+Executed successfully:
+
+```sh
+./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug :app:connectedDebugAndroidTest
+```
+
+API tests use local/intercepted fixtures and placeholder credentials. No paid OpenAI request was made; the actual phone failure and success with the higher budget have not been reproduced against the live model. The existing two-minute analysis deadline remains in effect. Android package/signing/credential identities are unchanged; Windows development remains paused.
+
+## Version 0.1.7 APK build and emulator validation
+
+The APK now includes the optional Advanced controls, all three review corrections, GPT-5.4 mini orientation analysis, region-specific local lighting checks and the analysis review dialog. Version code is 8. Android's package identity, signing key and credential encryption identities remain unchanged. Windows development remains paused.
+
+- **All 67 local tests passed**, with zero failures, errors or skips, including the 70-second quiet HTTP/1.1 and HTTP/2 transport fixtures, image handling, source preservation, credential/session storage, solar calculations, orientation parsing, cancellation, two-stage request ordering and default-flow invariance.
+- **All 17 instrumented tests passed on Stillword_Pixel**, Android 16 / API 36, serial `emulator-5554`. The fifteen existing tests include the expanded manual-location Activity-recreation regression. Two new native-Android checks exercise analysis followed by one image response and the lighting-review dialog, and ambiguous analysis stopping without an image-generation POST or result file. They use generated PNGs, isolated/intercepted API responses and nonfunctional placeholder credentials; they do not contact OpenAI.
+- `assembleDebug` and `lintDebug` passed. Lint reports **zero errors and nineteen existing warnings** about available dependency updates and optional KTX style changes.
+- The final APK was installed and launched through T3 device control. Synthetic capture, a large landscape crop preview, Advanced controls, the new paid-analysis explanation, reachable Visualize action, portrait layout and retention of Advanced after rotation were checked visually. Automatic tool scrolling failed to reach the nested list; the tool-advised direct swipe inside the controls worked. No app change was needed.
+- Output: `app/build/outputs/apk/debug/Vizruna-0.1.7-debug.apk`, SHA-256 `f102484a6db5ba849d6d47d89ef9e1c52c10e8dc5af10037ad998e70ba99982a`.
+
+Executed successfully:
+
+```sh
+./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug :app:connectedDebugAndroidTest
+```
+
+No real paid orientation analysis or image generation was made. Native tests verify the app's processing of supplied fixture responses; they do not establish how accurately GPT-5.4 mini interprets the user's real scene, whether the image model follows that interpretation, or the actual paid-request latency/cost. Physical-phone and real-model evaluation remain manual checks with the user's key entered only in the app.
+
+## Earlier source validation before the 0.1.7 APK
+
+### Two-stage Advanced orientation — source-only checks
 
 Advanced now performs one GPT-5.4 mini text-analysis request before the existing GPT Image 2.6 Sunburst image request. Advanced off still makes exactly one image request with the unchanged base prompt. The image model, `n=1`, streaming parameters, image ordering and original/full-resolution handling remain unchanged. Windows is paused and untouched. Existing APK hashes were checked before and after; no APK packaging or installation was performed.
 

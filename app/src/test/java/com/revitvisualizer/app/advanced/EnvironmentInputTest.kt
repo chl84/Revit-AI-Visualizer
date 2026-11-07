@@ -50,6 +50,24 @@ class EnvironmentInputTest {
         assertTrue(review.contains("Europe/Oslo"))
     }
 
+    @Test fun optionalInputsNeverInventSolarDataOrAnUnsentGuide() {
+        val orientation = SceneOrientation.parse(OrientationFixtures.scene())
+        for (weather in Weather.entries) for (snow in listOf(false, true)) {
+            for (settings in listOf(EnvironmentSettings(), EnvironmentSettings(place = place), EnvironmentSettings(northConfirmed = true))) {
+                val resolved = settings.copy(weather = weather, snow = snow).resolve()
+                val prompt = EnvironmentPrompt.build(resolved, orientation)
+                assertTrue(prompt.startsWith(ArchitecturePrompt.text))
+                assertTrue(prompt.contains("Requested weather: ${weather.label}"))
+                assertTrue(prompt.contains(if (snow) "SNOW ON" else "SNOW OFF"))
+                assertFalse(prompt.contains("Solar bearing:"))
+                assertFalse(prompt.contains("Image 2"))
+                assertFalse(prompt.contains("SCENE ORIENTATION ANALYSIS"))
+                assertFalse(prompt.contains("Local civil date/time"))
+                assertEquals(settings.place != null, prompt.contains("Bø i Telemark"))
+            }
+        }
+    }
+
     @Test fun nightOvercastSnowAndPlaceNeverRequestLandmarksOrSolarShadows() {
         val settings = EnvironmentSettings(place = place, date = LocalDate.of(2026, 12, 21),
             time = java.time.LocalTime.MIDNIGHT, northConfirmed = true, snow = true, weather = Weather.Overcast)
@@ -64,11 +82,23 @@ class EnvironmentInputTest {
         assertTrue(prompt.contains("Never copy the arrow"))
     }
 
+    @Test fun multiLineLightingDoesNotLeaveEnvironmentPromptIndented() {
+        // Night, civil twilight and daylight use differently shaped lighting text.
+        for (time in listOf(java.time.LocalTime.MIDNIGHT, java.time.LocalTime.of(15, 30), java.time.LocalTime.NOON)) {
+            val resolved = EnvironmentSettings(place = place, date = LocalDate.of(2026, 12, 21), time = time,
+                northConfirmed = true).resolve()
+            val details = EnvironmentPrompt.details(resolved)
+            assertTrue(details.startsWith("OPTIONAL ENVIRONMENT"))
+            assertFalse(details.lines().any { it.startsWith(" ") })
+            assertTrue(details.contains("\n\nRequested weather: Clear."))
+        }
+    }
+
     @Test fun clearSummerSunHasOpposingGroundShadowAndIndependentSnowOff() {
         val resolved = EnvironmentSettings(place = place, date = LocalDate.of(2026, 6, 21), northConfirmed = true).resolve()
         val prompt = EnvironmentPrompt.build(resolved)
         assertTrue(prompt.contains("Solar bearing:"))
-        val shadow = String.format(java.util.Locale.ROOT, "%.4f", (resolved.sun.azimuth + 180) % 360)
+        val shadow = String.format(java.util.Locale.ROOT, "%.4f", (resolved.sun!!.azimuth + 180) % 360)
         assertTrue(prompt.contains("shadows point toward bearing $shadow"))
         assertTrue(prompt.contains("SNOW OFF"))
         assertTrue(prompt.contains("not as a flat rotation"))

@@ -53,6 +53,7 @@ fun AdvancedControls(model: VisualizerViewModel) {
             Modifier.semantics { contentDescription = "Enable Advanced" })
     }
     if (settings.enabled) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Use weather and snow on their own. Place and north arrow are optional; selecting both enables calculated sunlight and a separate paid orientation analysis.", style = MaterialTheme.typography.bodySmall)
         OutlinedTextField(model.placeQuery, model::updatePlaceQuery, label = { Text("Place anywhere in the world") },
             placeholder = { Text("New York, Bø i Telemark, Sahara…") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -74,7 +75,8 @@ fun AdvancedControls(model: VisualizerViewModel) {
             if (place.atPole) Text("At the pole, north is not unique. The arrow uses local north approached along longitude ${place.longitude}°. UTC is the default time convention.",
                 style = MaterialTheme.typography.bodySmall)
             TextButton(model::openManualPlace) { Text("Adjust coordinates / time zone") }
-        } else Text("Select a search result or set precise coordinates before visualizing.", style = MaterialTheme.typography.bodySmall)
+            TextButton({ model.updatePlaceQuery("") }) { Text("Remove location") }
+        } else Text("No location selected. Weather and snow can still be used.", style = MaterialTheme.typography.bodySmall)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             TextButton({
                 DatePickerDialog(context, { _, year, month, day ->
@@ -90,8 +92,8 @@ fun AdvancedControls(model: VisualizerViewModel) {
                 }, settings.time.hour, settings.time.minute, true).show()
             }) { Text("Time: ${settings.time}") }
         }
-        Text("Local time at the selected place, including daylight saving time.", style = MaterialTheme.typography.labelSmall)
-        val offsets = settings.offsets()
+        Text("Date and time apply to sunlight only when a location and confirmed north arrow are selected. Time is local to that place, including daylight saving time.", style = MaterialTheme.typography.labelSmall)
+        val offsets = if (settings.usesSolarOrientation) settings.offsets() else emptyList()
         if (offsets.size > 1) {
             Text("This time occurs twice. Choose which UTC offset:", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -100,7 +102,7 @@ fun AdvancedControls(model: VisualizerViewModel) {
                 }
             }
         }
-        if (place != null) {
+        if (place != null && settings.northConfirmed) {
             val time = runCatching { settings.localDateTime() }
             val local = time.getOrNull()
             if (local == null) Text(time.exceptionOrNull()?.message.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -127,9 +129,11 @@ fun AdvancedControls(model: VisualizerViewModel) {
             Text(if (settings.northConfirmed) "Adjust north arrow" else "Place north arrow")
         }
         Text(if (settings.northConfirmed) "North arrow confirmed. Changing the crop or perspective requires confirmation again."
-            else "Place the arrow on the prepared image and point N toward geographic north in the scene.", style = MaterialTheme.typography.bodySmall)
+            else "Optional: place the arrow on the prepared image and point N toward geographic north in the scene.", style = MaterialTheme.typography.bodySmall)
+        if (settings.northConfirmed) TextButton(model::removeNorth) { Text("Remove north arrow") }
         Text("Sun position assumes an unobstructed horizon and standard atmosphere. AI interprets the arrow and scene perspective; inspect the generated shadows for accuracy.", style = MaterialTheme.typography.labelSmall)
-        Text("Advanced first sends image previews to OpenAI for a paid orientation analysis, then requests one generated image. This adds analysis cost and waiting time. Unclear orientation stops the process before image generation.", style = MaterialTheme.typography.labelSmall)
+        Text(if (settings.usesSolarOrientation) "Location and north arrow selected: image previews are sent to OpenAI for a paid orientation analysis before one generated image. This adds cost and waiting time. Unclear orientation stops the process before image generation."
+            else "One generated image will be requested. No orientation analysis or north-arrow guide will be sent. A location on its own describes the environment; an arrow on its own does not set sunlight.", style = MaterialTheme.typography.labelSmall)
         Text("Place search uses Open-Meteo / GeoNames and device geocoding. Location describes the natural environment, without adding landmarks.", style = MaterialTheme.typography.labelSmall)
         TextButton({ links.openUri("https://open-meteo.com/en/docs/geocoding-api") }) { Text("Place data: Open-Meteo / GeoNames") }
         HorizontalDivider(Modifier.padding(vertical = 8.dp))

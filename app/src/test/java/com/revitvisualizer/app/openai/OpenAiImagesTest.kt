@@ -148,6 +148,40 @@ class OpenAiImagesTest {
         assertArrayEquals(bytes, result.file.readBytes())
     }
 
+    @Test fun partialAdvancedUsesOneImagePostWithoutAnalysisOrGuide() = runBlocking {
+        val bytes = png()
+        val source = input(bytes)
+        val place = Place("Ålesund", 62.47226, 6.1549, java.time.ZoneId.of("Europe/Oslo"))
+        val cases = listOf(EnvironmentSettings(snow = true), EnvironmentSettings(place = place),
+            EnvironmentSettings(northConfirmed = true), EnvironmentSettings())
+        for ((index, settings) in cases.withIndex()) {
+            val environment = settings.copy(weather = com.revitvisualizer.app.advanced.Weather.Rain).resolve()
+            val paths = CopyOnWriteArrayList<String>()
+            var body = ""
+            var analysisCalled = false
+            val client = OkHttpClient.Builder().addInterceptor { chain ->
+                paths += chain.request().url.encodedPath
+                body = Buffer().also { chain.request().body!!.writeTo(it) }.readUtf8()
+                response(chain, """{"data":[{"b64_json":"${Base64.encodeToString(bytes, Base64.NO_WRAP)}"}]}""".toResponseBody("application/json".toMediaType()))
+            }.build()
+            try {
+                val result = OpenAiImages(client).edit(source, "local-test-placeholder".toCharArray(),
+                    files.newFile("partial-$index.png"), environment, onOrientationAnalysis = { analysisCalled = true },
+                    onProgress = { assertFalse(it == ImageRequestPhase.AnalysingOrientation) })
+                assertEquals(listOf("/v1/images/edits"), paths.toList())
+                assertFalse(analysisCalled)
+                assertEquals(1, Regex("name=\"image\\[\\]\"").findAll(body).count())
+                assertFalse(body.contains("north-orientation-guide"))
+                assertFalse(body.contains("Solar bearing:"))
+                assertTrue(body.contains("Requested weather: Rain"))
+                assertTrue(body.contains(if (settings.snow) "SNOW ON" else "SNOW OFF"))
+                assertEquals(settings.place != null, body.contains("Ålesund"))
+                assertArrayEquals(bytes, source.file.readBytes())
+                assertArrayEquals(bytes, result.file.readBytes())
+            } finally { client.dispatcher.executorService.shutdown(); client.connectionPool.evictAll() }
+        }
+    }
+
     @Test fun failedOrAmbiguousAnalysisNeverSubmitsAnImageGeneration() = runBlocking {
         val bytes = png()
         val source = input(bytes)
@@ -155,7 +189,9 @@ class OpenAiImagesTest {
             java.time.ZoneId.of("Europe/Oslo")), northConfirmed = true).resolve()
         val guide = NorthGuide.create(source, environment.north, files.newFile("guide.png"))
         val cases = listOf(503 to "private-server-body", 200 to OrientationFixtures.response(
-            OrientationFixtures.scene().put("orientation_status", "ambiguous")))
+            OrientationFixtures.scene().put("orientation_status", "ambiguous")),
+            200 to org.json.JSONObject(OrientationFixtures.response()).put("status", "incomplete")
+                .put("incomplete_details", org.json.JSONObject().put("reason", "max_output_tokens")).toString())
         cases.forEachIndexed { index, (status, json) ->
             val paths = CopyOnWriteArrayList<String>()
             val client = OkHttpClient.Builder().addInterceptor { chain ->

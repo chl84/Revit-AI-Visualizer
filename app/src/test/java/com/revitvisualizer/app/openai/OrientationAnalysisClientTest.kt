@@ -70,6 +70,8 @@ class OrientationAnalysisClientTest {
         assertTrue(captured!!.body!!.isOneShot())
         val json = JSONObject(body)
         assertEquals("gpt-5.4-mini", json.getString("model"))
+        assertEquals(12_000, json.getInt("max_output_tokens"))
+        assertEquals("medium", json.getJSONObject("reasoning").getString("effort"))
         assertFalse(json.getBoolean("store"))
         assertFalse(json.getBoolean("stream"))
         assertFalse(json.has("tools"))
@@ -141,6 +143,73 @@ class OrientationAnalysisClientTest {
         assertEquals(1, requests)
     }
 
+    @Test fun outputLimitReportsReasonAndUsageWithoutPartialAnalysisOrPrivateProse() = runBlocking {
+        val input = input()
+        val guide = NorthGuide.create(input, environment.north, files.newFile("guide.png"))
+        var requests = 0
+        val fixture = JSONObject(OrientationFixtures.response()).put("status", "incomplete")
+            .put("incomplete_details", JSONObject().put("reason", "max_output_tokens").put("message", "private-server-message"))
+            .put("usage", JSONObject().put("output_tokens", 4000).put("output_tokens_details", JSONObject().put("reasoning_tokens", 3950)))
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests++
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("Fixture")
+                .header("x-request-id", "req_fixture123")
+                .body(fixture.toString().toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val failure = runCatching { OrientationAnalysisClient(client).analyze(input, guide, "local-test-placeholder".toCharArray(), environment) }.exceptionOrNull()
+        assertTrue(failure is ImageApiException)
+        val message = failure!!.message!!
+        assertTrue(message.contains("ANALYSIS_OUTPUT_LIMIT"))
+        assertTrue(message.contains("Reason: max_output_tokens"))
+        assertTrue(message.contains("Output tokens: 4000"))
+        assertTrue(message.contains("Reasoning tokens: 3950"))
+        assertTrue(message.contains("Requested output budget: 12000"))
+        assertTrue(message.contains("Analysis client request ID:"))
+        assertTrue(message.contains("OpenAI analysis request ID: req_fixture123"))
+        assertTrue(message.contains("No image generation was requested"))
+        assertFalse(message.contains("private-server-message"))
+        assertFalse(message.contains("local-test-placeholder"))
+        assertEquals(1, requests)
+    }
+
+    @Test fun nonCompletedStatusesAreDistinguishedAndArbitraryDiagnosticFieldsAreRedacted() = runBlocking {
+        val input = input()
+        val guide = NorthGuide.create(input, environment.north, files.newFile("guide.png"))
+        val cases = listOf(
+            JSONObject(OrientationFixtures.response()).put("status", "incomplete").put("incomplete_details", JSONObject().put("reason", "content_filter")) to "ANALYSIS_CONTENT_FILTER",
+            JSONObject(OrientationFixtures.response()).put("status", "failed").put("error", JSONObject().put("code", "server_error").put("message", "private-error-text")) to "ANALYSIS_API_ERROR",
+            JSONObject(OrientationFixtures.response()).put("status", "in_progress") to "ANALYSIS_NOT_COMPLETED",
+            JSONObject(OrientationFixtures.response()).put("status", "private-status").put("error", JSONObject().put("code", "private-api-code")).put("usage", JSONObject().put("output_tokens", "private-token-count")) to "ANALYSIS_API_ERROR",
+            JSONObject(OrientationFixtures.response()).put("status", "incomplete").put("incomplete_details", JSONObject().put("reason", "private-reason")).put("usage", JSONObject().put("output_tokens", -1)) to "ANALYSIS_INCOMPLETE",
+        )
+        for ((fixture, expectedCode) in cases) {
+            val client = OkHttpClient.Builder().addInterceptor { chain ->
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("Fixture")
+                    .header("x-request-id", "private-header-text")
+                    .body(fixture.toString().toResponseBody("application/json".toMediaType())).build()
+            }.build()
+            val failure = runCatching { OrientationAnalysisClient(client).analyze(input, guide, "local-test-placeholder".toCharArray(), environment) }.exceptionOrNull()
+            assertTrue(failure is ImageApiException)
+            assertTrue(failure!!.message!!.contains(expectedCode))
+            assertFalse(failure.message!!.contains("private-"))
+            assertFalse(failure.message!!.contains("Output tokens: -1"))
+        }
+    }
+
+    @Test fun incompleteMessageIsNotAcceptedUnderCompletedTopLevelStatus() = runBlocking {
+        val input = input()
+        val guide = NorthGuide.create(input, environment.north, files.newFile("guide.png"))
+        val fixture = JSONObject(OrientationFixtures.response()).apply {
+            getJSONArray("output").getJSONObject(1).put("status", "incomplete")
+        }
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("Fixture")
+                .body(fixture.toString().toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val failure = runCatching { OrientationAnalysisClient(client).analyze(input, guide, "local-test-placeholder".toCharArray(), environment) }.exceptionOrNull()
+        assertTrue(failure!!.message!!.contains("ANALYSIS_MESSAGE_INCOMPLETE"))
+    }
+
     @Test fun cancellationClosesAnalysisHttpCall() = runBlocking {
         val input = input()
         val guide = NorthGuide.create(input, environment.north, files.newFile("guide.png"))
@@ -162,6 +231,44 @@ class OrientationAnalysisClientTest {
         } finally { release.countDown() }
     }
 
+    @Test fun benignSchemaValidVariationsAreNormalizedInsteadOfRejected() {
+        val scene = OrientationFixtures.scene().apply {
+            getJSONArray("surfaces")
+                .put(JSONObject().put("region", "flat roof").put("normal_azimuth_degrees", JSONObject.NULL)
+                    .put("normal_elevation_degrees", 90).put("occlusion", "clear"))
+                .put(JSONObject().put("region", "right volume").put("normal_azimuth_degrees", 270)
+                    .put("normal_elevation_degrees", JSONObject.NULL).put("occlusion", "unknown"))
+                .put(JSONObject().put("region", "Long Timber Facade").put("normal_azimuth_degrees", 270)
+                    .put("normal_elevation_degrees", 0).put("occlusion", "clear"))
+                .put(JSONObject().put("region", " ").put("normal_azimuth_degrees", 0)
+                    .put("normal_elevation_degrees", 0).put("occlusion", "clear"))
+            getJSONArray("notes").put("").put("  ")
+        }
+        val result = OrientationAnalysisClient.parseResponse(JSONObject(OrientationFixtures.response(scene)))
+        assertEquals(listOf("left glazed gable", "long timber facade", "south-facing roof plane", "flat roof", "right volume"),
+            result.surfaces.map { it.region })
+        val roof = result.surfaces.single { it.region == "flat roof" }
+        assertEquals(0.0, roof.normalAzimuth!!, 0.0)
+        assertEquals(90.0, roof.normalElevation!!, 0.0)
+        assertTrue(roof.directSun(environment).startsWith("Faces the Sun:"))
+        val unpaired = result.surfaces.single { it.region == "right volume" }
+        assertNull(unpaired.normalAzimuth)
+        assertNull(unpaired.normalElevation)
+        assertEquals(90.0, result.surfaces.single { it.region == "long timber facade" }.normalAzimuth!!, 0.0)
+        assertEquals(listOf("Surface directions are inferred from perspective, not measured."), result.notes)
+    }
+
+    @Test fun unusableResolvedAnalysisReportsSafeDiagnosticWithoutModelText() {
+        val scene = OrientationFixtures.scene().put("surfaces", JSONArray().put(JSONObject()
+            .put("region", "private-model-response").put("normal_azimuth_degrees", JSONObject.NULL)
+            .put("normal_elevation_degrees", JSONObject.NULL).put("occlusion", "unknown")))
+        val error = runCatching { OrientationAnalysisClient.parseResponse(JSONObject(OrientationFixtures.response(scene))) }.exceptionOrNull()
+        assertTrue(error is ImageApiException)
+        assertTrue(error!!.message!!.contains("Diagnostic: ANALYSIS_INVALID_CONTENT."))
+        assertTrue(error.message!!.contains("No image generation was requested"))
+        assertFalse(error.message!!.contains("private-model-response"))
+    }
+
     @Test fun analysisDeadlineCancelsRatherThanRetrying() = runBlocking {
         val input = input()
         val guide = NorthGuide.create(input, environment.north, files.newFile("guide.png"))
@@ -178,6 +285,7 @@ class OrientationAnalysisClientTest {
         try {
             val error = runCatching { OrientationAnalysisClient(client, timeoutMillis = 1000).analyze(input, guide, "local-test-placeholder".toCharArray(), environment) }.exceptionOrNull()
             assertTrue(error is ImageApiException)
+            assertTrue(error!!.message!!.contains("exceeded its 1-second waiting limit"))
             assertTrue(call.get().isCanceled())
             assertEquals(1, requests)
         } finally { release.countDown() }

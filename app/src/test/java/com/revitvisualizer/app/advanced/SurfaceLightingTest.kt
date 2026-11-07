@@ -25,7 +25,7 @@ class SurfaceLightingTest {
         assertTrue(facing.directSun(environment.copy(sun = SunPosition(175.0, -4.0, -4.0))).contains("Sun below horizon"))
         assertTrue(facing.copy(occlusion = Occlusion.blocked).directSun(environment).contains("obstruction blocks"))
         assertTrue(facing.copy(normalAzimuth = null, normalElevation = null).directSun(environment).contains("orientation uncertain"))
-        assertTrue(facing.copy(normalAzimuth = environment.sun.azimuth + 90).directSun(environment).startsWith("Grazing"))
+        assertTrue(facing.copy(normalAzimuth = environment.sun!!.azimuth + 90).directSun(environment).startsWith("Grazing"))
     }
 
     @Test fun impossibleNormalsAndFalseResolvedOrientationAreRejected() {

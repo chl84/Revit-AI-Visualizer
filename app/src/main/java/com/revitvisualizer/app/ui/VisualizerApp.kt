@@ -152,7 +152,7 @@ fun VisualizerApp(model: VisualizerViewModel = viewModel()) {
             }
         }
         if (model.showCredentialDialog) CredentialDialog(onDismiss = model::dismissCredentialDialog, onSubmit = model::submitCredential,
-            advanced = model.environment.enabled)
+            advanced = model.environment.enabled && model.environment.usesSolarOrientation)
         if (model.showNorthEditor) model.northPreview?.let {
             NorthArrowDialog(it, model.environment.north, model::closeNorthEditor, model::confirmNorth)
         }

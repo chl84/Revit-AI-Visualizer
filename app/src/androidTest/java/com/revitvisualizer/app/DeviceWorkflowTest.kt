@@ -52,6 +52,22 @@ import com.revitvisualizer.app.advanced.EnvironmentSettings
 import com.revitvisualizer.app.advanced.Place
 import com.revitvisualizer.app.advanced.SunPosition
 import com.revitvisualizer.app.advanced.Daylight
+import com.revitvisualizer.app.advanced.NorthGuide
+import com.revitvisualizer.app.advanced.SceneOrientation
+import com.revitvisualizer.app.advanced.LightingAnalysisReport
+import com.revitvisualizer.app.openai.OpenAiImages
+import com.revitvisualizer.app.openai.ImageApiException
+import com.revitvisualizer.app.ui.LightingAnalysisReview
+import android.util.Base64
+import java.util.concurrent.CopyOnWriteArrayList
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.Buffer
+import org.json.JSONObject
+import org.json.JSONArray
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
@@ -90,6 +106,137 @@ class DeviceWorkflowTest {
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         bitmap.recycle()
         return ImageProcessor.describe(file)
+    }
+
+    private fun analysisFixture(ambiguous: Boolean = false): String {
+        val scene = JSONObject("""{
+            "orientation_status":"resolved",
+            "north_interpretation":"North points toward the left glazed gable.",
+            "sun_side":"Low behind the opposite end of the building.",
+            "shadow_direction":"Toward the north gable along the ground plane.",
+            "surfaces":[
+              {"region":"north glazed gable","normal_azimuth_degrees":0,"normal_elevation_degrees":0,"occlusion":"clear"},
+              {"region":"south wall","normal_azimuth_degrees":180,"normal_elevation_degrees":0,"occlusion":"unknown"}],
+            "notes":["Synthetic test response, not a real model interpretation."]
+        }""")
+        if (ambiguous) scene.put("orientation_status", "ambiguous")
+        return JSONObject().put("status", "completed").put("error", JSONObject.NULL).put("output", JSONArray()
+            .put(JSONObject().put("type", "message").put("role", "assistant").put("status", "completed")
+                .put("content", JSONArray().put(JSONObject().put("type", "output_text").put("text", scene.toString()))))).toString()
+    }
+
+    @Test fun advancedAnalysisThenImageAndLightingReviewRunOnAndroid() {
+        val input = fixture()
+        val bytes = input.file.readBytes()
+        val environment = EnvironmentSettings(place = Place("Ålesund", 62.47226, 6.1549, ZoneId.of("Europe/Oslo")),
+            date = LocalDate.of(2026, 11, 7), northConfirmed = true).resolve()
+        val guideFile = File(context.cacheDir, "north-test-${UUID.randomUUID()}.png")
+        val outputFile = File(context.cacheDir, "image-test-${UUID.randomUUID()}.png")
+        val guide = NorthGuide.create(input, environment.north, guideFile)
+        val paths = CopyOnWriteArrayList<String>()
+        var imageBody = ""
+        lateinit var analysis: SceneOrientation
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val path = chain.request().url.encodedPath
+            paths += path
+            val response = if (path == "/v1/responses") analysisFixture() else {
+                imageBody = Buffer().also { chain.request().body!!.writeTo(it) }.readUtf8()
+                JSONObject().put("data", JSONArray().put(JSONObject().put("b64_json", Base64.encodeToString(bytes, Base64.NO_WRAP)))).toString()
+            }
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("Local fixture")
+                .body(response.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            val output = runBlocking {
+                OpenAiImages(client).edit(input, "local-test-placeholder".toCharArray(), outputFile, environment, guide,
+                    onOrientationAnalysis = { analysis = it })
+            }
+            assertEquals(listOf("/v1/responses", "/v1/images/edits"), paths.toList())
+            assertArrayEquals(bytes, input.file.readBytes())
+            assertArrayEquals(bytes, output.file.readBytes())
+            assertTrue(imageBody.contains("Back-facing the Sun: NO direct sunlight"))
+            assertTrue(imageBody.contains("north glazed gable"))
+            compose.runOnUiThread {
+                compose.activity.setContent {
+                    MaterialTheme { LightingAnalysisReview(LightingAnalysisReport(environment, analysis)) }
+                }
+            }
+            compose.onNodeWithText("Review lighting analysis").performClick()
+            compose.onNodeWithText("Lighting analysis").assertIsDisplayed()
+            compose.onNodeWithText("Calculated Sun:", substring = true).assertExists()
+            compose.onNodeWithText("NO direct sunlight", substring = true).assertExists()
+            compose.onNodeWithText("Close").performClick()
+        } finally {
+            client.dispatcher.executorService.shutdown()
+            client.connectionPool.evictAll()
+            listOf(input.file, guideFile, outputFile).forEach { it.delete() }
+        }
+    }
+
+    @Test fun ambiguousAnalysisPreventsImageGenerationOnAndroid() {
+        val input = fixture()
+        val environment = EnvironmentSettings(place = Place("Ålesund", 62.47226, 6.1549, ZoneId.of("Europe/Oslo")),
+            date = LocalDate.of(2026, 11, 7), northConfirmed = true).resolve()
+        val guideFile = File(context.cacheDir, "north-test-${UUID.randomUUID()}.png")
+        val outputFile = File(context.cacheDir, "never-generated-${UUID.randomUUID()}.png")
+        val guide = NorthGuide.create(input, environment.north, guideFile)
+        val paths = CopyOnWriteArrayList<String>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            paths += chain.request().url.encodedPath
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("Local fixture")
+                .body(analysisFixture(ambiguous = true).toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            val failure = runBlocking {
+                runCatching { OpenAiImages(client).edit(input, "local-test-placeholder".toCharArray(), outputFile, environment, guide) }.exceptionOrNull()
+            }
+            assertTrue(failure is ImageApiException)
+            assertTrue(failure!!.message!!.contains("No image generation was requested"))
+            assertEquals(listOf("/v1/responses"), paths.toList())
+            assertFalse(outputFile.exists())
+        } finally {
+            client.dispatcher.executorService.shutdown()
+            client.connectionPool.evictAll()
+            listOf(input.file, guideFile, outputFile).forEach { it.delete() }
+        }
+    }
+
+    @Test fun outputLimitedAnalysisReportsReasonAndPreventsImageGenerationOnAndroid() {
+        val input = fixture()
+        val environment = EnvironmentSettings(place = Place("Ålesund", 62.47226, 6.1549, ZoneId.of("Europe/Oslo")),
+            date = LocalDate.of(2026, 11, 7), northConfirmed = true).resolve()
+        val guideFile = File(context.cacheDir, "north-test-${UUID.randomUUID()}.png")
+        val outputFile = File(context.cacheDir, "never-generated-${UUID.randomUUID()}.png")
+        val guide = NorthGuide.create(input, environment.north, guideFile)
+        val paths = CopyOnWriteArrayList<String>()
+        // Even a completed-looking message must be rejected when the overall response is incomplete.
+        val response = JSONObject(analysisFixture()).put("status", "incomplete")
+            .put("incomplete_details", JSONObject().put("reason", "max_output_tokens"))
+            .put("usage", JSONObject().put("output_tokens", 4000)
+                .put("output_tokens_details", JSONObject().put("reasoning_tokens", 3950))).toString()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            paths += chain.request().url.encodedPath
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("Local fixture")
+                .header("x-request-id", "req_device_fixture")
+                .body(response.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            val failure = runBlocking {
+                runCatching { OpenAiImages(client).edit(input, "local-test-placeholder".toCharArray(), outputFile, environment, guide) }.exceptionOrNull()
+            }
+            assertTrue(failure is ImageApiException)
+            val message = failure!!.message!!
+            listOf("ANALYSIS_OUTPUT_LIMIT", "max_output_tokens", "Output tokens: 4000", "Reasoning tokens: 3950",
+                "Requested output budget: 12000", "req_device_fixture", "Analysis client request ID:",
+                "No image generation was requested", "No automatic retry was made").forEach { assertTrue(message.contains(it)) }
+            assertFalse(message.contains("local-test-placeholder"))
+            assertEquals(listOf("/v1/responses"), paths.toList())
+            assertFalse(outputFile.exists())
+        } finally {
+            client.dispatcher.executorService.shutdown()
+            client.connectionPool.evictAll()
+            listOf(input.file, guideFile, outputFile).forEach { it.delete() }
+        }
     }
 
     @Test fun optionalAdvancedAcceptsCoordinatesAndArrowThenInvalidatesItAfterCrop() {
@@ -140,7 +287,7 @@ class DeviceWorkflowTest {
         compose.onNodeWithText("Cancel").performClick()
     }
 
-    @Test fun advancedRequiresDstOffsetSelectionAndNorthBeforeRequestingAKey() {
+    @Test fun solarOrientationValidatesDstButRemovingNorthAllowsWeatherOnly() {
         val image = fixture()
         compose.runOnIdle { model.acceptCapture(image.file) }
         awaitText("Prepare image")
@@ -148,16 +295,41 @@ class DeviceWorkflowTest {
         compose.runOnIdle {
             model.updateEnvironment(EnvironmentSettings(enabled = true,
                 place = Place("Bø", 59.41299, 9.0693, ZoneId.of("Europe/Oslo")),
-                date = LocalDate.of(2026, 10, 25), time = LocalTime.of(2, 30)))
+                date = LocalDate.of(2026, 10, 25), time = LocalTime.of(2, 30), northConfirmed = true))
+            model.visualize()
+            assertFalse(model.showCredentialDialog)
         }
+        awaitText("This local time occurs twice. Select its UTC offset below the time.")
+        compose.onNodeWithText("Close").performClick()
         compose.onNodeWithText("UTC+01:00").performScrollTo().performClick()
         compose.runOnIdle {
             assertEquals("2026-10-25T01:30:00Z", model.environment.localDateTime().toInstant().toString())
             model.visualize()
-            assertFalse(model.showCredentialDialog)
+            assertTrue(model.showCredentialDialog)
         }
-        awaitText("Place and confirm the north arrow on the prepared image.")
-        compose.onNodeWithText("Close").performClick()
+        awaitText("OpenAI API key")
+        compose.onNodeWithText("Cancel").performClick()
+        compose.onNodeWithText("Remove north arrow").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertFalse(model.environment.northConfirmed)
+            // An invalid DST time is irrelevant without solar orientation.
+            model.updateEnvironment(model.environment.copy(offset = null))
+            model.visualize()
+            assertTrue(model.showCredentialDialog)
+        }
+        awaitText("OpenAI API key")
+        compose.onNodeWithText("Cancel").performClick()
+        compose.onNodeWithText("Remove location").performScrollTo().performClick()
+        compose.onNodeWithText("Rain").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Snow cover").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(null, model.environment.place)
+            assertTrue(model.environment.snow)
+            model.visualize()
+            assertTrue(model.showCredentialDialog)
+        }
+        awaitText("OpenAI API key")
+        compose.onNodeWithText("Cancel").performClick()
     }
 
     @Test fun nrelSolarLibraryRunsOnAndroidIncludingExactPoles() {

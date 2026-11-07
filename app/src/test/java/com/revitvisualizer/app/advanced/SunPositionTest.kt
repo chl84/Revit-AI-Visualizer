@@ -80,10 +80,14 @@ class SunPositionTest {
         assertFalse(SunPosition(0.0, 90.0, 90.0).directionDefined)
     }
 
-    @Test fun advancedRequiresExplicitPlaceAndNorthConfirmation() {
+    @Test fun solarOrientationRequiresBothPlaceAndNorthButAdvancedDoesNot() {
         assertFalse(EnvironmentSettings().enabled)
-        assertThrows(EnvironmentException::class.java) { EnvironmentSettings().resolve() }
-        assertThrows(EnvironmentException::class.java) { EnvironmentSettings(place = oslo).resolve() }
+        for (settings in listOf(EnvironmentSettings(), EnvironmentSettings(place = oslo), EnvironmentSettings(northConfirmed = true))) {
+            assertFalse(settings.usesSolarOrientation)
+            assertNull(settings.resolve().sun)
+            assertNull(settings.resolve().time)
+        }
         assertEquals(oslo, EnvironmentSettings(place = oslo, northConfirmed = true).resolve().place)
+        assertTrue(EnvironmentSettings(place = oslo, northConfirmed = true).resolve().usesSolarOrientation)
     }
 }

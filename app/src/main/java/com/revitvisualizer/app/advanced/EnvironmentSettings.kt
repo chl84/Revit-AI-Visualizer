@@ -74,6 +74,8 @@ data class EnvironmentSettings(
 ) {
     fun offsets(): List<ZoneOffset> = place?.zone?.rules?.getValidOffsets(LocalDateTime.of(date, time)).orEmpty()
 
+    val usesSolarOrientation get() = place != null && northConfirmed
+
     fun localDateTime(): ZonedDateTime {
         val location = place ?: throw EnvironmentException("Find and select a place, or enter coordinates and a time zone.")
         if (date.year !in 1900..2100) throw EnvironmentException("Choose a date between 1900 and 2100.")
@@ -86,8 +88,8 @@ data class EnvironmentSettings(
     }
 
     fun resolve(): ResolvedEnvironment {
+        if (!usesSolarOrientation) return ResolvedEnvironment(place, null, null, weather, snow, north)
         val local = localDateTime()
-        if (!northConfirmed) throw EnvironmentException("Place and confirm the north arrow on the prepared image.")
         return ResolvedEnvironment(place!!, local, SunPosition.calculate(place, local), weather, snow, north)
     }
 }
@@ -115,5 +117,7 @@ data class SunPosition(val azimuth: Double, val elevation: Double, val apparentE
     }
 }
 
-data class ResolvedEnvironment(val place: Place, val time: ZonedDateTime, val sun: SunPosition,
-    val weather: Weather, val snow: Boolean, val north: NorthArrow)
+data class ResolvedEnvironment(val place: Place?, val time: ZonedDateTime?, val sun: SunPosition?,
+    val weather: Weather, val snow: Boolean, val north: NorthArrow) {
+    val usesSolarOrientation get() = place != null && time != null && sun != null
+}
