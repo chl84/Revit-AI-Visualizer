@@ -54,7 +54,7 @@ The core suite also runs on Linux. The Windows projects can be cross-compiled wi
 
 ## GitHub CI
 
-`.github/workflows/windows.yml` runs on Windows-source pushes to `main`, pull requests touching Windows files, or manual dispatch. Official checkout, .NET setup, and artifact upload actions are pinned to immutable commit SHAs. Repository token permissions are read-only and checkout credentials are not persisted.
+`.github/workflows/windows.yml` runs on Windows-source pushes to `main`, changes to the shared Android prompt checked by the parity test, pull requests touching these files, or manual dispatch. Official checkout, .NET setup, and artifact upload actions are pinned to immutable commit SHAs. Repository token permissions are read-only and checkout credentials are not persisted.
 
 CI runs the portable regression suite, publishes the self-contained x64 app, and runs native Windows tests covering DPAPI persistence and tampering, PNG conversion and exact export, active-session cleanup, comparison rendering/opacity, zoom reset, image import and responsive crop layout. It also launches the published executable, verifies its window, and closes it. A screenshot of a synthetic preparation view and test logs are uploaded as separate evidence. No API key is needed in repository secrets.
 

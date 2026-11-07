@@ -6,7 +6,6 @@
       <Setter Property="Background" Value="#101416" /><Setter Property="Foreground" Value="#E5EBE7" />
       <Setter Property="FontFamily" Value="Segoe UI" /><Setter Property="FontSize" Value="14" />
     </Style>
-    <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#E5EBE7" /></Style>
     <Style TargetType="Button">
       <Setter Property="Padding" Value="16,10" /><Setter Property="Margin" Value="0,0,8,0" />
       <Setter Property="Background" Value="#26302F" /><Setter Property="Foreground" Value="#E5EBE7" />
@@ -41,5 +40,5 @@
     <Style TargetType="CheckBox"><Setter Property="Foreground" Value="#E5EBE7" /><Setter Property="VerticalContentAlignment" Value="Center" /></Style>
     <Style TargetType="RadioButton"><Setter Property="Foreground" Value="#E5EBE7" /><Setter Property="Margin" Value="0,0,20,0" /></Style>
     <Style TargetType="Slider"><Setter Property="Margin" Value="0,8,0,8" /></Style>
-  
+
 </ResourceDictionary>
