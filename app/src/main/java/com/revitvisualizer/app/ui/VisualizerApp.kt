@@ -53,6 +53,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -136,6 +138,7 @@ fun VisualizerApp(model: VisualizerViewModel = viewModel()) {
                                         style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Text("PNG · ${result.width} × ${result.height}", style = MaterialTheme.typography.labelSmall,
                                         modifier = Modifier.padding(vertical = 8.dp))
+                                    model.lightingAnalysis?.let { LightingAnalysisReview(it) }
                                     Button(onClick = model::save, modifier = Modifier.fillMaxWidth()) { Text("Save Image") }
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                         TextButton(onClick = model::back) { Text("Back to prepare") }
@@ -148,7 +151,11 @@ fun VisualizerApp(model: VisualizerViewModel = viewModel()) {
                 }
             }
         }
-        if (model.showCredentialDialog) CredentialDialog(onDismiss = model::dismissCredentialDialog, onSubmit = model::submitCredential)
+        if (model.showCredentialDialog) CredentialDialog(onDismiss = model::dismissCredentialDialog, onSubmit = model::submitCredential,
+            advanced = model.environment.enabled)
+        if (model.showNorthEditor) model.northPreview?.let {
+            NorthArrowDialog(it, model.environment.north, model::closeNorthEditor, model::confirmNorth)
+        }
         model.failure?.let { FailureDialog(it, model::dismissFailure) }
         model.busy?.let { label ->
             Dialog(onDismissRequest = {}, properties = DialogProperties(
@@ -239,7 +246,8 @@ private fun PrepareScreen(model: VisualizerViewModel, modifier: Modifier = Modif
             Column(area.verticalScroll(rememberScrollState())) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("Correct perspective", Modifier.weight(1f))
-                    Switch(checked = model.perspective, onCheckedChange = model::setPerspectiveMode)
+                    Switch(checked = model.perspective, onCheckedChange = model::setPerspectiveMode,
+                        modifier = Modifier.semantics { contentDescription = "Correct perspective" })
                 }
                 if (model.perspective) {
                     OutlinedTextField(
@@ -258,6 +266,7 @@ private fun PrepareScreen(model: VisualizerViewModel, modifier: Modifier = Modif
                     TextButton(onClick = model::back) { Text("Back") }
                     TextButton(onClick = model::resetSelection) { Text("Reset selection") }
                 }
+                AdvancedControls(model)
                 Text("Sends this prepared image to OpenAI using your paid API account.",
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
@@ -282,7 +291,7 @@ private fun PrepareScreen(model: VisualizerViewModel, modifier: Modifier = Modif
 }
 
 @Composable
-fun CredentialDialog(onDismiss: () -> Unit, onSubmit: (String, Boolean) -> Unit) {
+fun CredentialDialog(onDismiss: () -> Unit, onSubmit: (String, Boolean) -> Unit, advanced: Boolean = false) {
     // Unsaved entry never enters saved-instance state. Persistence is an explicit device-local choice.
     var value by remember { mutableStateOf("") }
     var rememberOnDevice by remember { mutableStateOf(false) }
@@ -308,6 +317,8 @@ fun CredentialDialog(onDismiss: () -> Unit, onSubmit: (String, Boolean) -> Unit)
                     else "Kept only in memory until the app closes. Turn on Remember on this device to reuse it next time.",
                     style = MaterialTheme.typography.bodySmall)
                 Text("Visualize sends the prepared image to OpenAI and uses your API credits. Direct device access is not a secure distribution model for a public app.",
+                    style = MaterialTheme.typography.bodySmall)
+                if (advanced) Text("Advanced includes a separate paid orientation analysis before image generation.",
                     style = MaterialTheme.typography.bodySmall)
             }
         },

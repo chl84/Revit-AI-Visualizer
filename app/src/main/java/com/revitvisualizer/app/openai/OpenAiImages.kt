@@ -1,6 +1,9 @@
 package com.revitvisualizer.app.openai
 
 import com.revitvisualizer.app.imaging.LocalImage
+import com.revitvisualizer.app.advanced.EnvironmentPrompt
+import com.revitvisualizer.app.advanced.ResolvedEnvironment
+import com.revitvisualizer.app.advanced.SceneOrientation
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -8,6 +11,8 @@ import javax.net.ssl.SSLException
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -23,6 +28,7 @@ import okio.BufferedSink
 class ImageApiException(message: String) : IOException(message)
 
 enum class ImageRequestPhase(val description: String, val diagnostic: String) {
+    AnalysingOrientation("Analysing the north arrow and scene orientation…", "analysing orientation"),
     Connecting("Connecting securely to OpenAI…", "connecting"),
     Uploading("Uploading the prepared image…", "uploading"),
     AwaitingHeaders("Waiting for OpenAI to respond…", "waiting for response headers"),
@@ -33,6 +39,7 @@ enum class ImageRequestPhase(val description: String, val diagnostic: String) {
 class OpenAiImages(
     client: OkHttpClient = secureClient(),
     private val requestTimeoutMillis: Long = TimeUnit.MINUTES.toMillis(20),
+    private val orientationClient: OrientationAnalysisClient = OrientationAnalysisClient(client),
 ) {
     // SSE exits OkHttp's full-call timeout on response headers. The coroutine deadline
     // below bounds the entire operation while permitting long waits between events.
@@ -49,6 +56,9 @@ class OpenAiImages(
         input: LocalImage,
         credential: CharArray,
         destination: File,
+        environment: ResolvedEnvironment? = null,
+        northGuide: LocalImage? = null,
+        onOrientationAnalysis: (SceneOrientation) -> Unit = {},
         onProgress: (ImageRequestPhase) -> Unit = {},
     ): LocalImage {
         if (credential.isEmpty() || credential.any { it.code !in 33..126 }) {
@@ -61,10 +71,19 @@ class OpenAiImages(
             throw ImageApiException("The prepared PNG exceeds the API's 50 MB input limit. Select a smaller area or import a smaller image.")
         }
         require(requestTimeoutMillis > 0)
+        require((environment == null) == (northGuide == null)) { "Advanced settings require an orientation guide." }
+        if (northGuide != null && (northGuide.file.length() >= 50_000_000L || northGuide.file.canonicalFile == destination.canonicalFile)) {
+            throw ImageApiException("The north arrow guide could not be prepared safely.")
+        }
+        val orientation = if (environment != null) {
+            onProgress(ImageRequestPhase.AnalysingOrientation)
+            orientationClient.analyze(input, northGuide!!, credential, environment).also(onOrientationAnalysis)
+        } else null
+        currentCoroutineContext().ensureActive()
         val trace = ImageRequestTrace(onProgress)
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("model", MODEL)
-            .addFormDataPart("prompt", ArchitecturePrompt.text)
+            .addFormDataPart("prompt", EnvironmentPrompt.build(environment, orientation))
             .addFormDataPart("n", "1")
             .addFormDataPart("partial_images", "0")
             .addFormDataPart("stream", "true")
@@ -72,6 +91,7 @@ class OpenAiImages(
             .addFormDataPart("size", "auto")
             .addFormDataPart("output_format", "png")
             .addFormDataPart("image[]", "revit-view.png", input.file.asRequestBody("image/png".toMediaType()))
+            .apply { northGuide?.let { addFormDataPart("image[]", "north-orientation-guide.png", it.file.asRequestBody("image/png".toMediaType())) } }
             .build()
         val oneShotBody = object : RequestBody() {
             override fun contentType() = body.contentType()

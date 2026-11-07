@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
@@ -47,6 +48,15 @@ import com.revitvisualizer.app.storage.ImageStore
 import com.revitvisualizer.app.ui.Comparison
 import com.revitvisualizer.app.ui.FailureDialog
 import com.revitvisualizer.app.ui.CredentialDialog
+import com.revitvisualizer.app.advanced.EnvironmentSettings
+import com.revitvisualizer.app.advanced.Place
+import com.revitvisualizer.app.advanced.SunPosition
+import com.revitvisualizer.app.advanced.Daylight
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.ZonedDateTime
 import androidx.compose.runtime.mutableStateOf
 import java.io.File
 import java.security.MessageDigest
@@ -82,6 +92,84 @@ class DeviceWorkflowTest {
         return ImageProcessor.describe(file)
     }
 
+    @Test fun optionalAdvancedAcceptsCoordinatesAndArrowThenInvalidatesItAfterCrop() {
+        val image = fixture(800, 400)
+        val bytes = image.file.readBytes()
+        compose.runOnIdle { model.acceptCapture(image.file) }
+        awaitText("Prepare image")
+        compose.onNodeWithText("Prepare image").performClick()
+        compose.onNodeWithContentDescription("Enable Advanced").performScrollTo().assertIsOff().performClick()
+        compose.onNodeWithText("Use coordinates").performScrollTo().performClick()
+        compose.onNodeWithText("Place / environment name").performTextInput("Bø i Telemark")
+        compose.onNodeWithText("Latitude (−90 to 90)").performScrollTo().performTextInput("59.41299")
+        compose.onNodeWithText("Longitude (−180 to 180)").performScrollTo().performTextInput("9.0693")
+        compose.onNodeWithText("IANA time zone or UTC").performScrollTo().performTextInput("Europe/Oslo")
+        compose.activityRule.scenario.recreate()
+        awaitText("Precise location")
+        mapOf("Place / environment name" to "Bø i Telemark", "Latitude (−90 to 90)" to "59.41299",
+            "Longitude (−180 to 180)" to "9.0693", "IANA time zone or UTC" to "Europe/Oslo").forEach { (label, expected) ->
+            compose.onNodeWithText(label).performScrollTo().assert(SemanticsMatcher("Unconfirmed location field restored") {
+                it.config.getOrNull(SemanticsProperties.EditableText)?.text == expected
+            })
+        }
+        compose.onNodeWithText("Use location").performClick()
+        compose.onNodeWithText("Snow cover").performScrollTo()
+        compose.onNodeWithContentDescription("Snow cover").performClick()
+        compose.onNodeWithText("Place north arrow").performScrollTo().performClick()
+        awaitText("Confirm north arrow")
+        compose.onNodeWithContentDescription("North arrow rotation").performSemanticsAction(SemanticsActions.SetProgress) { it(90f) }
+        compose.activityRule.scenario.recreate()
+        awaitText("Confirm north arrow")
+        compose.onNodeWithText("Arrow rotation: 90° on the image").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Confirm north arrow").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertTrue(model.environment.enabled)
+            assertTrue(model.environment.northConfirmed)
+            assertTrue(model.environment.snow)
+            assertEquals(ZoneId.of("Europe/Oslo"), model.environment.place!!.zone)
+            assertTrue(model.environment.north.head.x > model.environment.north.tail.x)
+            assertEquals(model.environment.north.head.y, model.environment.north.tail.y, 0.0001f)
+            assertArrayEquals(bytes, model.source!!.file.readBytes())
+            model.select(Selection().moveCorner(0, ImagePoint(0.1f, 0.1f), false))
+            assertFalse(model.environment.northConfirmed)
+            assertEquals(null, model.northPreview)
+            model.updateEnvironment(model.environment.copy(enabled = false, place = null))
+            model.visualize()
+        }
+        awaitText("OpenAI API key") // Advanced off still reaches the existing standard flow.
+        compose.onNodeWithText("Cancel").performClick()
+    }
+
+    @Test fun advancedRequiresDstOffsetSelectionAndNorthBeforeRequestingAKey() {
+        val image = fixture()
+        compose.runOnIdle { model.acceptCapture(image.file) }
+        awaitText("Prepare image")
+        compose.onNodeWithText("Prepare image").performClick()
+        compose.runOnIdle {
+            model.updateEnvironment(EnvironmentSettings(enabled = true,
+                place = Place("Bø", 59.41299, 9.0693, ZoneId.of("Europe/Oslo")),
+                date = LocalDate.of(2026, 10, 25), time = LocalTime.of(2, 30)))
+        }
+        compose.onNodeWithText("UTC+01:00").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals("2026-10-25T01:30:00Z", model.environment.localDateTime().toInstant().toString())
+            model.visualize()
+            assertFalse(model.showCredentialDialog)
+        }
+        awaitText("Place and confirm the north arrow on the prepared image.")
+        compose.onNodeWithText("Close").performClick()
+    }
+
+    @Test fun nrelSolarLibraryRunsOnAndroidIncludingExactPoles() {
+        val place = Place("NREL reference", 39.742476, -105.1786, ZoneOffset.ofHours(-7), 1830.14)
+        val sun = SunPosition.calculate(place, ZonedDateTime.of(2003, 10, 17, 12, 30, 30, 0, place.zone))
+        assertEquals(194.34024, sun.azimuth, 0.005)
+        assertEquals(39.872046, sun.elevation, 0.005)
+        val pole = Place("North Pole", 90.0, 0.0, ZoneOffset.UTC)
+        val winter = SunPosition.calculate(pole, ZonedDateTime.of(2026, 12, 21, 12, 0, 0, 0, pole.zone))
+        assertEquals(Daylight.Night, winter.daylight)
+    }
+
     @Test fun cameraCropAndKeyDialogPreserveTheOriginalAcrossRecreation() {
         val shutter = compose.onNodeWithContentDescription("Take photo")
         compose.waitUntil(30_000) { runCatching { shutter.assertIsEnabled() }.isSuccess }
@@ -90,7 +178,7 @@ class DeviceWorkflowTest {
         val source = model.source!!
         val hash = MessageDigest.getInstance("SHA-256").digest(source.file.readBytes())
         compose.onNodeWithText("Prepare image").performClick()
-        compose.onNode(isToggleable()).performClick()
+        compose.onNodeWithContentDescription("Correct perspective").performClick()
         val description = "Crop selection. Drag the four corner handles to frame the Revit viewport."
         try {
             compose.waitUntil(10_000) {

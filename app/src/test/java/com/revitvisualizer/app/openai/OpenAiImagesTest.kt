@@ -5,6 +5,9 @@ import android.graphics.Color
 import android.util.Base64
 import com.revitvisualizer.app.imaging.ImageProcessor
 import com.revitvisualizer.app.imaging.LocalImage
+import com.revitvisualizer.app.advanced.EnvironmentSettings
+import com.revitvisualizer.app.advanced.NorthGuide
+import com.revitvisualizer.app.advanced.Place
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.ConnectException
@@ -96,11 +99,101 @@ class OpenAiImagesTest {
         }
         assertTrue(sentBody.contains(ArchitecturePrompt.text))
         assertTrue(sentBody.contains("name=\"image[]\"; filename=\"revit-view.png\""))
+        assertEquals(1, parts.count { it.contains("name=\"image[]\"") })
+        assertEquals(ArchitecturePrompt.text, parts.single { it.contains("name=\"prompt\"\r\n") }
+            .substringAfter("\r\n\r\n").removeSuffix("\r\n"))
         assertFalse(sentBody.contains("input_fidelity"))
         assertEquals("text/event-stream", sentRequest!!.header("Accept"))
         assertArrayEquals(bytes, result.file.readBytes())
         assertArrayEquals(bytes, source.file.readBytes())
         assertEquals(1, requests)
+    }
+
+    @Test fun advancedSendsCleanInputThenNorthGuideWithOneOutputAndNoRetry() = runBlocking {
+        val bytes = png()
+        val source = input(bytes)
+        val environment = EnvironmentSettings(place = Place("Bø, Telemark, Norway", 59.41299, 9.0693,
+            java.time.ZoneId.of("Europe/Oslo")), northConfirmed = true, snow = true).resolve()
+        val guide = NorthGuide.create(source, environment.north, files.newFile("north-guide.png"))
+        var requests = 0
+        var sentBody = ""
+        var boundary = ""
+        val paths = CopyOnWriteArrayList<String>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests++
+            paths += chain.request().url.encodedPath
+            val json = if (chain.request().url.encodedPath == "/v1/responses") OrientationFixtures.response() else {
+                val buffer = Buffer()
+                chain.request().body!!.writeTo(buffer)
+                sentBody = buffer.readUtf8()
+                boundary = chain.request().body!!.contentType()!!.parameter("boundary")!!
+                """{"data":[{"b64_json":"${Base64.encodeToString(bytes, Base64.NO_WRAP)}"}]}"""
+            }
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(json.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val result = OpenAiImages(client).edit(source, "local-test-placeholder".toCharArray(), files.newFile("advanced-result.png"), environment, guide)
+        assertEquals(2, Regex("name=\"image\\[\\]\"").findAll(sentBody).count())
+        assertTrue(sentBody.indexOf("filename=\"revit-view.png\"") < sentBody.indexOf("filename=\"north-orientation-guide.png\""))
+        assertTrue(sentBody.contains("SNOW ON"))
+        assertTrue(sentBody.contains("Europe/Oslo"))
+        assertTrue(sentBody.contains("SCENE ORIENTATION ANALYSIS"))
+        assertTrue(sentBody.contains("left glazed gable"))
+        assertTrue(sentBody.contains("Back-facing the Sun: NO direct sunlight"))
+        assertEquals("1", sentBody.split("--$boundary").single { it.contains("name=\"n\"\r\n") }
+            .substringAfter("\r\n\r\n").removeSuffix("\r\n"))
+        assertEquals(listOf("/v1/responses", "/v1/images/edits"), paths.toList())
+        assertEquals(2, requests)
+        assertArrayEquals(bytes, source.file.readBytes())
+        assertArrayEquals(bytes, result.file.readBytes())
+    }
+
+    @Test fun failedOrAmbiguousAnalysisNeverSubmitsAnImageGeneration() = runBlocking {
+        val bytes = png()
+        val source = input(bytes)
+        val environment = EnvironmentSettings(place = Place("Ålesund", 62.47226, 6.1549,
+            java.time.ZoneId.of("Europe/Oslo")), northConfirmed = true).resolve()
+        val guide = NorthGuide.create(source, environment.north, files.newFile("guide.png"))
+        val cases = listOf(503 to "private-server-body", 200 to OrientationFixtures.response(
+            OrientationFixtures.scene().put("orientation_status", "ambiguous")))
+        cases.forEachIndexed { index, (status, json) ->
+            val paths = CopyOnWriteArrayList<String>()
+            val client = OkHttpClient.Builder().addInterceptor { chain ->
+                paths += chain.request().url.encodedPath
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(status).message("Fixture")
+                    .body(json.toResponseBody("application/json".toMediaType())).build()
+            }.build()
+            val destination = java.io.File(files.root, "never-generated-$index.png")
+            val failure = runCatching { OpenAiImages(client).edit(source, "local-test-placeholder".toCharArray(), destination, environment, guide) }.exceptionOrNull()
+            assertTrue(failure is ImageApiException)
+            assertTrue(failure!!.message!!.contains("No image generation was requested"))
+            assertFalse(failure.message!!.contains("private-server-body"))
+            assertEquals(listOf("/v1/responses"), paths.toList())
+            assertFalse(destination.exists())
+        }
+    }
+
+    @Test fun cancellationAfterAnalysisPreventsTheImagePost() = runBlocking {
+        val bytes = png()
+        val source = input(bytes)
+        val environment = EnvironmentSettings(place = Place("Ålesund", 62.47226, 6.1549,
+            java.time.ZoneId.of("Europe/Oslo")), northConfirmed = true).resolve()
+        val guide = NorthGuide.create(source, environment.north, files.newFile("guide.png"))
+        val paths = CopyOnWriteArrayList<String>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            paths += chain.request().url.encodedPath
+            response(chain, OrientationFixtures.response().toResponseBody("application/json".toMediaType()))
+        }.build()
+        val destination = java.io.File(files.root, "never-generated.png")
+        val job = launch {
+            val generationJob = coroutineContext[kotlinx.coroutines.Job]!!
+            OpenAiImages(client).edit(source, "local-test-placeholder".toCharArray(), destination, environment, guide,
+                onOrientationAnalysis = { generationJob.cancel() })
+        }
+        job.join()
+        assertTrue(job.isCancelled)
+        assertEquals(listOf("/v1/responses"), paths.toList())
+        assertFalse(destination.exists())
     }
 
     @Test fun errorsDoNotExposeResponseBodiesOrRetryRequests() {
@@ -188,7 +281,7 @@ class OpenAiImagesTest {
         }.build()
         try {
             val output = withTimeout(3_000) {
-                OpenAiImages(client).edit(input(bytes), "local-test-placeholder".toCharArray(), files.newFile("stream.png"), phases::add)
+                OpenAiImages(client).edit(input(bytes), "local-test-placeholder".toCharArray(), files.newFile("stream.png"), onProgress = phases::add)
             }
             assertArrayEquals(bytes, output.file.readBytes())
             assertTrue(call.get().isCanceled())
@@ -299,7 +392,7 @@ class OpenAiImagesTest {
         try {
             val error = assertThrows(ImageApiException::class.java) {
                 runBlocking { OpenAiImages(client, requestTimeoutMillis = 1_500).edit(
-                    input(png()), "local-test-placeholder".toCharArray(), output, phases::add,
+                    input(png()), "local-test-placeholder".toCharArray(), output, onProgress = phases::add,
                 ) }
             }
             assertTrue(phases.contains(ImageRequestPhase.Waiting))

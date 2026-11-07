@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -51,6 +52,8 @@ import com.revitvisualizer.app.imaging.ImageProcessor
 import com.revitvisualizer.app.imaging.LocalImage
 import com.revitvisualizer.app.imaging.Selection
 import com.revitvisualizer.app.imaging.fittedSize
+import com.revitvisualizer.app.advanced.NorthArrow
+import com.revitvisualizer.app.advanced.NorthGuide
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -229,4 +232,51 @@ private fun DrawScope.drawFitted(bitmap: ImageBitmap, rect: Rect, alpha: Float =
     drawImage(bitmap, dstOffset = IntOffset((rect.left + (rect.width - width) / 2).roundToInt(),
         (rect.top + (rect.height - height) / 2).roundToInt()),
         dstSize = IntSize(width.roundToInt().coerceAtLeast(1), height.roundToInt().coerceAtLeast(1)), alpha = alpha)
+}
+
+@Composable
+fun NorthArrowPreview(image: LocalImage, north: NorthArrow, onNorth: (NorthArrow) -> Unit, modifier: Modifier = Modifier) {
+    val preview = loadPreview(image)
+    val bitmap = remember(preview.bitmap) { preview.bitmap?.asImageBitmap() }
+    val current by rememberUpdatedState(north)
+    val update by rememberUpdatedState(onNorth)
+    var viewport by remember { mutableStateOf(IntSize.Zero) }
+    Box(modifier, contentAlignment = Alignment.Center) {
+        if (bitmap == null) PreviewStatus(preview.failed)
+        else Canvas(Modifier.fillMaxSize().onSizeChanged { viewport = it }.semantics {
+            contentDescription = "North arrow editor. Drag the base to move the arrow; drag N to change its direction and length."
+        }.pointerInput(bitmap, viewport) {
+            val rect = imageRect(bitmap, viewport, 16.dp.toPx())
+            var handle = -1
+            detectDragGestures(onDragStart = { position ->
+                val points = listOf(current.tail, current.head).map { Offset(rect.left + it.x * rect.width, rect.top + it.y * rect.height) }
+                handle = points.indices.minByOrNull { (points[it] - position).getDistance() } ?: -1
+                if (handle >= 0 && (points[handle] - position).getDistance() > 48.dp.toPx()) handle = -1
+            }, onDragEnd = { handle = -1 }, onDragCancel = { handle = -1 }) { change, delta ->
+                if (handle >= 0 && rect.width > 0 && rect.height > 0) {
+                    change.consume()
+                    val arrow = current
+                    val next = if (handle == 0) {
+                        val dx = (delta.x / rect.width).coerceIn(0.04f - minOf(arrow.tail.x, arrow.head.x), 0.96f - maxOf(arrow.tail.x, arrow.head.x))
+                        val dy = (delta.y / rect.height).coerceIn(0.04f - minOf(arrow.tail.y, arrow.head.y), 0.96f - maxOf(arrow.tail.y, arrow.head.y))
+                        arrow.copy(tail = ImagePoint(arrow.tail.x + dx, arrow.tail.y + dy), head = ImagePoint(arrow.head.x + dx, arrow.head.y + dy))
+                    } else arrow.copy(head = ImagePoint(((change.position.x - rect.left) / rect.width).coerceIn(0.04f, 0.96f),
+                        ((change.position.y - rect.top) / rect.height).coerceIn(0.04f, 0.96f)))
+                    if (next.valid(image.width, image.height)) update(next)
+                }
+            }
+        }) {
+            val rect = imageRect(bitmap, viewport, 16.dp.toPx())
+            drawImage(bitmap, dstOffset = IntOffset(rect.left.roundToInt(), rect.top.roundToInt()),
+                dstSize = IntSize(rect.width.roundToInt().coerceAtLeast(1), rect.height.roundToInt().coerceAtLeast(1)))
+            drawContext.canvas.nativeCanvas.apply {
+                save(); translate(rect.left, rect.top)
+                NorthGuide.draw(this, rect.width, rect.height, north)
+                restore()
+            }
+            listOf(north.tail, north.head).forEach { point ->
+                drawCircle(Color.White, 12.dp.toPx(), Offset(rect.left + point.x * rect.width, rect.top + point.y * rect.height), style = Stroke(2.dp.toPx()))
+            }
+        }
+    }
 }

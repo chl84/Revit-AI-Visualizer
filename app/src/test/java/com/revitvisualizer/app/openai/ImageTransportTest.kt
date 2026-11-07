@@ -98,7 +98,7 @@ class ImageTransportTest {
                     val phases = CopyOnWriteArrayList<ImageRequestPhase>()
                     val started = System.nanoTime()
                     val result = OpenAiImages(client, requestTimeoutMillis = 100_000).edit(
-                        source, "local-test-placeholder".toCharArray(), files.newFile("delayed-$index.png"), phases::add,
+                        source, "local-test-placeholder".toCharArray(), files.newFile("delayed-$index.png"), onProgress = phases::add,
                     )
                     assertTrue(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started) >= 70)
                     assertArrayEquals(bytes, result.file.readBytes())
