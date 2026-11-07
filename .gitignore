@@ -49,3 +49,12 @@ exports/
 # Desktop files
 .DS_Store
 Thumbs.db
+
+# Windows / .NET source-only repository
+.vs/
+**/bin/
+**/obj/
+windows/artifacts/
+*.user
+*.suo
+*.dpapi

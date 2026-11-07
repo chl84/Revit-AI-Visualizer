@@ -1,0 +1,83 @@
+name: Windows desktop
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+  pull_request:
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Build and test Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned .NET SDK
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: windows/global.json
+      - name: Test portable image and API behavior
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          dotnet run --project tests/RevitVisualizer.Core.Tests -c Release | Tee-Object artifacts/core-tests.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish self-contained Windows executable
+        run: |
+          dotnet publish RevitVisualizer.Windows/RevitVisualizer.Windows.csproj -c Release -r win-x64 --self-contained true -o artifacts/publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test native Windows services, layout and published executable
+        run: |
+          dotnet run --project tests/RevitVisualizer.Windows.Tests -c Release -- artifacts artifacts/publish/Revit-AI-Visualizer.exe | Tee-Object artifacts/windows-tests.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package portable app
+        run: |
+          New-Item -ItemType Directory -Force artifacts/package | Out-Null
+          Copy-Item artifacts/publish/Revit-AI-Visualizer.exe artifacts/package/
+          Copy-Item PORTABLE-README.txt artifacts/package/README.txt
+          Compress-Archive -Path artifacts/package/* -DestinationPath artifacts/Revit-AI-Visualizer-Windows-x64.zip
+          $hash = (Get-FileHash artifacts/Revit-AI-Visualizer-Windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Revit-AI-Visualizer-Windows-x64.zip" | Set-Content -Encoding utf8 artifacts/SHA256SUMS.txt
+      - name: Upload Windows download
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Revit-AI-Visualizer-Windows-x64
+          path: |
+            windows/artifacts/Revit-AI-Visualizer-Windows-x64.zip
+            windows/artifacts/SHA256SUMS.txt
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload synthetic test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows-test-evidence
+          path: |
+            windows/artifacts/*-tests.txt
+            windows/artifacts/windows-prepare-smoke.png
+          if-no-files-found: ignore
+          retention-days: 14

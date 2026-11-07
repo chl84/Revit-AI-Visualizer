@@ -1,10 +1,14 @@
 # Revit AI Visualizer
 
-A minimal native Android app for turning a captured or imported Autodesk Revit viewport into a photorealistic architectural visualization. Kotlin, Jetpack Compose, Material 3, CameraX, coroutines, and OkHttp. One app module; no backend, accounts, database, or CI.
+Native Android and Windows apps for turning a captured or imported Autodesk Revit viewport into a photorealistic architectural visualization. Android uses Kotlin, Jetpack Compose and CameraX; Windows uses C# and WPF on .NET 10. Both connect directly to OpenAI without an application backend or database. GitHub Actions builds and tests the Windows app.
 
 Architectural fidelity is the priority. The fixed prompt instructs the model to retain visible geometry, openings, proportions, rooflines, and the camera viewpoint. **Generative image editing cannot guarantee geometric accuracy.** Always inspect the original and overlay before using a result.
 
-## Build and run
+## Windows
+
+See [Windows download, usage and build instructions](windows/README.md). The **Windows desktop** GitHub Actions workflow produces a self-contained portable x64 executable, downloadable from a successful run. No API key is needed for CI.
+
+## Android build and run
 
 Requirements: JDK 17 or 21, Android SDK Platform 36, Build Tools 35.0.0, and an Android 10 (API 29) or newer device. Android Studio can install the SDK components and run the project. Use the bundled Gradle wrapper; dependencies are pinned to stable versions.
 

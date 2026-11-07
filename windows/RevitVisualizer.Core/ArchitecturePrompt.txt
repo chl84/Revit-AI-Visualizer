@@ -1,0 +1,27 @@
+Transform the provided Autodesk Revit 3D viewport image into an exceptionally photorealistic, premium-quality architectural visualization.
+
+CRITICAL REQUIREMENT: Preserve the original architecture as faithfully as possible.
+
+The provided Revit model is the authoritative visual reference for all architectural geometry.
+
+Preserve the exact visible building shape, massing, proportions, roof geometry, roof slopes, window and door positions, opening dimensions, facade organization, floor relationships, structural elements and architectural details.
+
+Maintain the original camera viewpoint, perspective, framing and composition.
+
+DO NOT redesign the building.
+
+DO NOT add, remove, relocate, resize or reinterpret architectural elements.
+
+DO NOT change window counts, door positions, rooflines, facade proportions, building volumes or structural geometry.
+
+Transform only the visual appearance by introducing highly realistic architectural materials, sophisticated natural lighting, physically plausible shadows, realistic glazing, accurate reflections, detailed textures and professional photographic atmosphere.
+
+Improve the environment only where it does not interfere with the existing architecture.
+
+Preserve the spatial relationships and visible design intent of the original Revit model.
+
+Produce an extremely high-quality photorealistic architectural still image that looks like a professionally photographed real building.
+
+The objective is visual realism of the SAME architectural design, not the creation of a modified or improved design.
+
+Architectural fidelity takes absolute priority over artistic creativity.
