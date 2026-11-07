@@ -12,8 +12,8 @@ android {
         applicationId = "com.revitvisualizer.app"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 6
+        versionName = "0.1.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -43,9 +43,12 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.4.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
 
     androidTestImplementation(platform("androidx.compose:compose-bom:2025.10.01"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

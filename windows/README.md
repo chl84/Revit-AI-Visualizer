@@ -1,10 +1,12 @@
-# Revit AI Visualizer for Windows
+# Vizruna for Windows
 
 A native C# / WPF desktop app on .NET 10 LTS. It runs the same architecture-preserving image edit as the Android app, with desktop image import, clipboard paste, and screen-region capture. No Revit plug-in, backend, database, or embedded API key is required.
 
+Vizruna is the new product name. The original Windows data location and DPAPI entropy remain stable, so remembered API keys survive the rename. The repository URL and internal source namespaces are unchanged.
+
 ## Download and run
 
-Open the repository's **Actions → Windows desktop** workflow and select a successful run. Download **Revit-AI-Visualizer-Windows-x64**, extract the artifact, then extract `Revit-AI-Visualizer-Windows-x64.zip` and run `Revit-AI-Visualizer.exe`. The published app includes the .NET runtime. It is a portable, unsigned Windows x64 executable; no installer or administrator access is needed.
+Open the repository's **Actions → Vizruna Windows** workflow and select a successful run. Download **Vizruna-Windows-x64**, extract the artifact, then extract `Vizruna-Windows-x64.zip` and run `Vizruna.exe`. The published app includes the .NET runtime. It is a portable, unsigned Windows x64 executable; no installer or administrator access is needed.
 
 Use **Open image**, **Paste image**, or **Capture screen area**. Screen capture hides the app and lets you select the viewport; Escape cancels. The original pixels are retained separately. Preparation supports rectangular crop and manual four-corner projective correction. Enter the actual viewport aspect ratio when correcting perspective, or leave it blank to estimate from the edges.
 
@@ -47,7 +49,7 @@ The SDK version is pinned in `global.json`. From this directory on a Windows mac
 ```powershell
 dotnet run --project tests/RevitVisualizer.Core.Tests -c Release
 dotnet publish RevitVisualizer.Windows/RevitVisualizer.Windows.csproj -c Release -r win-x64 --self-contained true -o artifacts/publish
-dotnet run --project tests/RevitVisualizer.Windows.Tests -c Release -- artifacts artifacts/publish/Revit-AI-Visualizer.exe
+dotnet run --project tests/RevitVisualizer.Windows.Tests -c Release -- artifacts artifacts/publish/Vizruna.exe
 ```
 
 The core suite also runs on Linux. The Windows projects can be cross-compiled with the SDK on Linux, but their native tests must run on Windows. Projects use framework libraries only; there are no third-party NuGet dependencies.

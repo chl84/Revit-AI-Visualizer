@@ -1,4 +1,4 @@
-name: Windows desktop
+name: Vizruna Windows
 
 on:
   push:
@@ -53,22 +53,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test native Windows services, layout and published executable
         run: |
-          dotnet run --project tests/RevitVisualizer.Windows.Tests -c Release -- artifacts artifacts/publish/Revit-AI-Visualizer.exe | Tee-Object artifacts/windows-tests.txt
+          dotnet run --project tests/RevitVisualizer.Windows.Tests -c Release -- artifacts artifacts/publish/Vizruna.exe | Tee-Object artifacts/windows-tests.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package portable app
         run: |
           New-Item -ItemType Directory -Force artifacts/package | Out-Null
-          Copy-Item artifacts/publish/Revit-AI-Visualizer.exe artifacts/package/
+          Copy-Item artifacts/publish/Vizruna.exe artifacts/package/
           Copy-Item PORTABLE-README.txt artifacts/package/README.txt
-          Compress-Archive -Path artifacts/package/* -DestinationPath artifacts/Revit-AI-Visualizer-Windows-x64.zip
-          $hash = (Get-FileHash artifacts/Revit-AI-Visualizer-Windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  Revit-AI-Visualizer-Windows-x64.zip" | Set-Content -Encoding utf8 artifacts/SHA256SUMS.txt
+          Compress-Archive -Path artifacts/package/* -DestinationPath artifacts/Vizruna-Windows-x64.zip
+          $hash = (Get-FileHash artifacts/Vizruna-Windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Vizruna-Windows-x64.zip" | Set-Content -Encoding utf8 artifacts/SHA256SUMS.txt
       - name: Upload Windows download
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: Revit-AI-Visualizer-Windows-x64
+          name: Vizruna-Windows-x64
           path: |
-            windows/artifacts/Revit-AI-Visualizer-Windows-x64.zip
+            windows/artifacts/Vizruna-Windows-x64.zip
             windows/artifacts/SHA256SUMS.txt
           compression-level: 0
           if-no-files-found: error
@@ -77,7 +77,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: Windows-test-evidence
+          name: Vizruna-Windows-test-evidence
           path: |
             windows/artifacts/*-tests.txt
             windows/artifacts/windows-prepare-smoke.png

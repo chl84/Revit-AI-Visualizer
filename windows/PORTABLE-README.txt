@@ -1,6 +1,6 @@
-Revit AI Visualizer - Windows x64
+Vizruna - Windows x64
 
-Extract this ZIP into a folder and run Revit-AI-Visualizer.exe.
+Extract this ZIP into a folder and run Vizruna.exe.
 The .NET runtime is included. Administrator access is not required.
 This portable build is not code-signed.
 

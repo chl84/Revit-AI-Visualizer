@@ -4,9 +4,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
-    <Version>0.1.0</Version>
-    <Authors>Revit AI Visualizer</Authors>
-    <Company>Revit AI Visualizer</Company>
-    <Copyright>Revit AI Visualizer contributors</Copyright>
+    <Version>0.1.1</Version>
+    <Authors>Vizruna</Authors>
+    <Company>Vizruna</Company>
+    <Product>Vizruna</Product>
+    <Copyright>Vizruna contributors</Copyright>
   </PropertyGroup>
 </Project>

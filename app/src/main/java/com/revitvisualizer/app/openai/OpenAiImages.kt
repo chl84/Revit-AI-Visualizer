@@ -1,20 +1,13 @@
 package com.revitvisualizer.app.openai
 
-import android.util.Base64
-import android.util.Base64InputStream
-import android.util.JsonReader
-import com.revitvisualizer.app.imaging.ImageProcessor
 import com.revitvisualizer.app.imaging.LocalImage
 import java.io.File
-import java.io.FilterInputStream
 import java.io.IOException
-import java.io.InputStream
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
+import javax.net.ssl.SSLException
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
-import okhttp3.Call
-import okhttp3.Callback
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -22,115 +15,171 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.Response
+import okhttp3.sse.EventSource
+import okhttp3.sse.EventSourceListener
+import okhttp3.sse.EventSources
 import okio.BufferedSink
 
 class ImageApiException(message: String) : IOException(message)
 
-class OpenAiImages(private val client: OkHttpClient = secureClient()) {
-    suspend fun edit(input: LocalImage, credential: CharArray, destination: File): LocalImage {
+enum class ImageRequestPhase(val description: String, val diagnostic: String) {
+    Connecting("Connecting securely to OpenAI…", "connecting"),
+    Uploading("Uploading the prepared image…", "uploading"),
+    AwaitingHeaders("Waiting for OpenAI to respond…", "waiting for response headers"),
+    Waiting("Waiting for the final image from OpenAI…", "waiting for OpenAI"),
+    Receiving("Receiving and saving the final PNG…", "receiving the image"),
+}
+
+class OpenAiImages(
+    client: OkHttpClient = secureClient(),
+    private val requestTimeoutMillis: Long = TimeUnit.MINUTES.toMillis(20),
+) {
+    // SSE exits OkHttp's full-call timeout on response headers. The coroutine deadline
+    // below bounds the entire operation while permitting long waits between events.
+    private val events = EventSources.createFactory(client.newBuilder()
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .apply { interceptors().add(0, ImageResponseReader.limitResponseSize) }
+        .addNetworkInterceptor { chain ->
+            chain.request().tag(ImageRequestTrace::class.java)?.connected(chain.connection()?.protocol())
+            chain.proceed(chain.request())
+        }
+        .build())
+
+    suspend fun edit(
+        input: LocalImage,
+        credential: CharArray,
+        destination: File,
+        onProgress: (ImageRequestPhase) -> Unit = {},
+    ): LocalImage {
         if (credential.isEmpty() || credential.any { it.code !in 33..126 }) {
             throw ImageApiException("Enter a valid API key without spaces or line breaks.")
+        }
+        if (input.file.canonicalFile == destination.canonicalFile) {
+            throw ImageApiException("The original image must not be overwritten.")
         }
         if (input.file.length() >= 50_000_000L) {
             throw ImageApiException("The prepared PNG exceeds the API's 50 MB input limit. Select a smaller area or import a smaller image.")
         }
+        require(requestTimeoutMillis > 0)
+        val trace = ImageRequestTrace(onProgress)
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("model", MODEL)
             .addFormDataPart("prompt", ArchitecturePrompt.text)
             .addFormDataPart("n", "1")
             .addFormDataPart("partial_images", "0")
+            .addFormDataPart("stream", "true")
             .addFormDataPart("quality", "max")
             .addFormDataPart("size", "auto")
             .addFormDataPart("output_format", "png")
             .addFormDataPart("image[]", "revit-view.png", input.file.asRequestBody("image/png".toMediaType()))
             .build()
-        // A one-shot body also prevents HTTP follow-ups such as a 503 with Retry-After: 0.
         val oneShotBody = object : RequestBody() {
             override fun contentType() = body.contentType()
             override fun contentLength() = body.contentLength()
             override fun isOneShot() = true
-            override fun writeTo(sink: BufferedSink) = body.writeTo(sink)
+            override fun writeTo(sink: BufferedSink) {
+                trace.advance(ImageRequestPhase.Uploading)
+                body.writeTo(sink)
+                sink.flush()
+                trace.advance(ImageRequestPhase.AwaitingHeaders)
+            }
         }
         val request = Request.Builder()
             .url(ENDPOINT)
             .header("Authorization", "Bearer ${String(credential)}")
+            .header("Accept", "text/event-stream")
+            .header("X-Client-Request-Id", trace.clientRequestId)
+            .tag(ImageRequestTrace::class.java, trace)
             .post(oneShotBody)
             .build()
-        return suspendCancellableCoroutine { continuation ->
-            val call = client.newCall(request)
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    destination.delete()
-                    if (continuation.isActive) continuation.resumeWithException(
-                        ImageApiException("The OpenAI connection failed or timed out. Check your connection before trying again. The request is not retried automatically."),
-                    )
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    try {
-                        val result = response.use {
-                            if (!it.isSuccessful) throw ImageApiException(messageForStatus(it.code))
-                            val stream = it.body?.byteStream()
-                                ?: throw ImageApiException("OpenAI returned an empty response.")
-                            readImage(stream, destination)
-                        }
-                        continuation.resume(result, onCancellation = { _, value, _ -> value.file.delete() })
-                    } catch (error: Exception) {
+        trace.advance(ImageRequestPhase.Connecting)
+        return withTimeoutOrNull(requestTimeoutMillis) {
+            suspendCancellableCoroutine { continuation ->
+                fun fail(source: EventSource, error: ImageApiException) {
+                    source.cancel()
+                    if (continuation.isActive) {
                         destination.delete()
-                        if (continuation.isActive) continuation.resumeWithException(
-                            if (error is ImageApiException) error
-                            else ImageApiException("OpenAI returned an incomplete or invalid image. No result was saved."),
-                        )
+                        continuation.resumeWithException(error)
+                    }
+                }
+                fun finish(source: EventSource, result: LocalImage) {
+                    // A final image is terminal: never wait for the server to close the stream.
+                    source.cancel()
+                    continuation.resume(result, onCancellation = { _, image, _ -> image.file.delete() })
+                }
+                fun readFinal(source: EventSource, read: () -> LocalImage?) {
+                    if (!continuation.isActive) { source.cancel(); return }
+                    try {
+                        read()?.let { finish(source, it) }
+                    } catch (_: ImageResponseLimitException) {
+                        fail(source, trace.error("RESPONSE_SIZE", "The image response exceeded the device's safe size limit."))
+                    } catch (_: ImageStreamException) {
+                        fail(source, trace.error("STREAM_ERROR", "OpenAI stopped the image request before completion."))
+                    } catch (error: ImageBodyReadException) {
+                        fail(source, trace.networkFailure(error))
+                    } catch (error: SSLException) {
+                        fail(source, trace.networkFailure(error))
+                    } catch (_: OutOfMemoryError) {
+                        fail(source, trace.error("MEMORY_LIMIT", "There is not enough memory to receive this image."))
+                    } catch (_: Exception) {
+                        fail(source, trace.error("INVALID_IMAGE", "The final image could not be decoded or saved. Check available storage."))
                     } finally {
                         if (continuation.isCancelled) destination.delete()
                     }
                 }
-            })
-        }
-    }
-
-    private fun readImage(input: InputStream, destination: File): LocalImage {
-        var encoded: String? = null
-        var count = 0
-        JsonReader(LimitedInput(input, 96L * 1024 * 1024).reader(Charsets.UTF_8).buffered()).use { reader ->
-            reader.beginObject()
-            while (reader.hasNext()) {
-                if (reader.nextName() == "data") {
-                    reader.beginArray()
-                    while (reader.hasNext()) {
-                        count++
-                        reader.beginObject()
-                        while (reader.hasNext()) {
-                            if (reader.nextName() == "b64_json" && count == 1) encoded = reader.nextString()
-                            else reader.skipValue()
-                        }
-                        reader.endObject()
+                val source = events.newEventSource(request, object : EventSourceListener() {
+                    override fun onOpen(eventSource: EventSource, response: Response) {
+                        if (continuation.isActive) trace.advance(ImageRequestPhase.Waiting)
+                        else eventSource.cancel()
                     }
-                    reader.endArray()
-                } else reader.skipValue()
+
+                    override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                        if (type == "error") {
+                            fail(eventSource, trace.error("STREAM_ERROR", "OpenAI stopped the image request before completion."))
+                            return
+                        }
+                        readFinal(eventSource) {
+                            ImageResponseReader.event(type, data, destination) {
+                                trace.advance(ImageRequestPhase.Receiving)
+                            }
+                        }
+                    }
+
+                    override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                        if (!continuation.isActive) return
+                        if (response != null && !response.isSuccessful) {
+                            fail(eventSource, trace.error("HTTP_${response.code}", messageForStatus(response.code)))
+                        } else if (t is IllegalStateException && response?.isSuccessful == true &&
+                            response.body?.contentType()?.subtype == "json") {
+                            // Accept a final JSON image if an upstream returns the non-streaming format.
+                            readFinal(eventSource) {
+                                trace.advance(ImageRequestPhase.Receiving)
+                                ImageResponseReader.json(response.body!!.byteStream(), destination)
+                            }
+                        } else fail(eventSource, trace.networkFailure(t))
+                    }
+
+                    override fun onClosed(eventSource: EventSource) {
+                        if (continuation.isActive) fail(eventSource, trace.error(
+                            "INCOMPLETE_STREAM", "The connection closed before OpenAI returned a complete image.",
+                        ))
+                    }
+                })
+                continuation.invokeOnCancellation { source.cancel(); destination.delete() }
             }
-            reader.endObject()
-        }
-        if (count != 1 || encoded.isNullOrEmpty()) throw ImageApiException("OpenAI did not return one complete image.")
-        // Decode directly to disk without allocating another complete image byte array.
-        Base64InputStream(StringInput(encoded!!), Base64.DEFAULT).use { decoder ->
-            destination.outputStream().use { output ->
-                LimitedInput(decoder, 64L * 1024 * 1024).copyTo(output)
-            }
-        }
-        return ImageProcessor.requirePng(destination)
+        } ?: throw trace.error("REQUEST_DEADLINE", "The image request exceeded its overall waiting limit.")
     }
 
     companion object {
         const val MODEL = "gpt-image-2.6-sunburst"
         private const val ENDPOINT = "https://api.openai.com/v1/images/edits"
 
-        private fun secureClient() = OkHttpClient.Builder()
+        internal fun secureClient() = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(2, TimeUnit.MINUTES)
-            .readTimeout(15, TimeUnit.MINUTES)
             .callTimeout(20, TimeUnit.MINUTES)
+            // Keep a quiet HTTP/2 transport active without submitting another image request.
+            .pingInterval(20, TimeUnit.SECONDS)
             .followRedirects(false)
             .followSslRedirects(false)
             .retryOnConnectionFailure(false)
@@ -140,32 +189,10 @@ class OpenAiImages(private val client: OkHttpClient = secureClient()) {
             400, 413, 422 -> "OpenAI rejected this image request. Check the input size and your project's support for GPT Image 2.6 Sunburst."
             401 -> "OpenAI rejected the API key. Clear it and enter a valid key."
             403, 404 -> "Your OpenAI project does not have access to GPT Image 2.6 Sunburst, or the model is unavailable."
+            408, 504 -> "OpenAI or an upstream gateway reported a request timeout (HTTP $code)."
             429 -> "OpenAI reported a rate or billing limit. Check your account before trying again."
-            in 500..599 -> "OpenAI is temporarily unavailable. Try again later."
-            else -> "OpenAI could not complete the request. No automatic retry was made."
+            in 500..599 -> "OpenAI is temporarily unavailable (HTTP $code). Try again later."
+            else -> "OpenAI could not complete the request (HTTP $code)."
         }
-    }
-}
-
-private class StringInput(private val value: String) : InputStream() {
-    private var position = 0
-    override fun read(): Int = if (position < value.length) value[position++].code else -1
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-        if (length == 0) return 0
-        if (position == value.length) return -1
-        val count = minOf(length, value.length - position)
-        repeat(count) { buffer[offset + it] = value[position++].code.toByte() }
-        return count
-    }
-}
-
-private class LimitedInput(input: InputStream, private val limit: Long) : FilterInputStream(input) {
-    private var total = 0L
-    override fun read(): Int = super.read().also { if (it >= 0) checkLimit(1) }
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
-        `in`.read(buffer, offset, length).also { if (it > 0) checkLimit(it) }
-    private fun checkLimit(count: Int) {
-        total += count
-        if (total > limit) throw IOException("Image response exceeded the local size limit.")
     }
 }

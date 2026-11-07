@@ -14,6 +14,8 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -29,6 +31,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.swipe
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.printToString
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -42,6 +45,9 @@ import com.revitvisualizer.app.imaging.Selection
 import com.revitvisualizer.app.imaging.fittedSize
 import com.revitvisualizer.app.storage.ImageStore
 import com.revitvisualizer.app.ui.Comparison
+import com.revitvisualizer.app.ui.FailureDialog
+import com.revitvisualizer.app.ui.CredentialDialog
+import androidx.compose.runtime.mutableStateOf
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
@@ -54,7 +60,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Device checks use synthetic images and never confirm the API-key dialog or contact OpenAI. */
+/** Device checks use synthetic images and placeholder credentials and never contact OpenAI. */
 @RunWith(AndroidJUnit4::class)
 class DeviceWorkflowTest {
     @get:Rule(order = 0) val cameraPermission = GrantPermissionRule.grant(Manifest.permission.CAMERA)
@@ -209,5 +215,51 @@ class DeviceWorkflowTest {
             original.file.delete()
             result.file.delete()
         }
+    }
+
+    @Test fun networkFailureRemainsReadableUntilExplicitlyDismissed() {
+        val visible = mutableStateOf(true)
+        val message = "The HTTP/2 image stream was reset before the final image arrived.\n\n" +
+            "Stage: waiting for OpenAI. Elapsed: 64s. Diagnostic: HTTP2_STREAM_RESET.\n" +
+            "Connection: h2. Response: HTTP 200. Read: 12 bytes.\n" +
+            "Client request ID: 123e4567-e89b-12d3-a456-426614174000.\n" +
+            "OpenAI request ID: req_local_fixture_123.\n" +
+            "No automatic retry was made. A submitted request may still finish and be billed."
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MaterialTheme { if (visible.value) FailureDialog(message) { visible.value = false } }
+            }
+        }
+        compose.onNodeWithText("Could not complete action").assertIsDisplayed()
+        compose.onNodeWithText(message).assertIsDisplayed()
+        compose.onNodeWithText(message).performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        val scroll = compose.onNodeWithText(message).fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+        assertTrue(scroll.value() > 0f)
+        compose.onNodeWithText("Close").assertIsDisplayed()
+        compose.onNodeWithText("Close").performClick()
+        assertTrue(compose.onAllNodesWithText(message).fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test fun rememberChoiceIsOptionalAndSubmittedWithAMaskedKey() {
+        var submitted: Pair<String, Boolean>? = null
+        val visible = mutableStateOf(true)
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MaterialTheme {
+                    if (visible.value) CredentialDialog(onDismiss = { visible.value = false }, onSubmit = { value, remember ->
+                        submitted = value to remember
+                        visible.value = false
+                    })
+                }
+            }
+        }
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password))
+            .performTextInput("local-test-placeholder")
+        compose.onNode(isToggleable()).performScrollTo().assertIsOff().performClick().assertIsOn()
+        compose.onNodeWithText("Stored encrypted on this device. Clear key removes the saved copy.").assertIsDisplayed()
+        // This isolated dialog callback cannot launch a generation or call OpenAI.
+        compose.onNodeWithText("Visualize").performClick()
+        compose.runOnIdle { assertEquals("local-test-placeholder" to true, submitted) }
     }
 }

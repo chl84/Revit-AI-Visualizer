@@ -45,11 +45,11 @@ class ImageStore(private val context: Context) {
     suspend fun export(image: LocalImage): Uri {
         ImageProcessor.requirePng(image.file)
         val resolver = context.contentResolver
-        val name = "Revit-Visualization-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())}-${UUID.randomUUID().toString().take(8)}.png"
+        val name = "Vizruna-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())}-${UUID.randomUUID().toString().take(8)}.png"
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
             put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Revit AI Visualizer")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Vizruna")
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }) ?: error("The gallery could not create a file.")
         try {

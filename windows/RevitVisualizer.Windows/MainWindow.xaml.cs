@@ -240,7 +240,7 @@ public partial class MainWindow : Window
     {
         if (result is null) return;
         var picker = new SaveFileDialog { Title = "Save the returned PNG", Filter = "PNG image|*.png", DefaultExt = ".png", AddExtension = true,
-            OverwritePrompt = true, FileName = $"Revit-Visualization-{DateTime.Now:yyyyMMdd-HHmmss}.png" };
+            OverwritePrompt = true, FileName = $"Vizruna-{DateTime.Now:yyyyMMdd-HHmmss}.png" };
         if (picker.ShowDialog(this) != true) return;
         string full = Path.GetFullPath(picker.FileName);
         if (!full.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) { ShowFailure("Choose a file name ending in .png."); return; }

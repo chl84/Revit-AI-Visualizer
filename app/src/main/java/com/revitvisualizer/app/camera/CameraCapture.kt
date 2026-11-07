@@ -15,13 +15,19 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -107,11 +113,11 @@ fun CameraCapture(
         }
     }
 
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
+    val preview: @Composable (Modifier) -> Unit = { area ->
+        Box(area.background(Color.Black).semantics { contentDescription = "Camera preview" }, contentAlignment = Alignment.Center) {
             if (permitted && available) AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
             else Column(
-                Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                Modifier.verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(if (available) "Photograph your Revit viewport" else "Camera unavailable", style = MaterialTheme.typography.titleMedium)
@@ -119,7 +125,8 @@ fun CameraCapture(
                 if (!permitted) Button(onClick = { permission.launch(Manifest.permission.CAMERA) }) { Text("Enable camera") }
             }
         }
-        Spacer(Modifier.height(16.dp))
+    }
+    val shutter: @Composable () -> Unit = {
         Button(
             enabled = permitted && capture != null && !capturing,
             onClick = {
@@ -143,7 +150,26 @@ fun CameraCapture(
             shape = CircleShape,
             modifier = Modifier.size(76.dp).semantics { contentDescription = "Take photo" },
         ) { Box(Modifier.size(30.dp).background(MaterialTheme.colorScheme.onPrimary, CircleShape)) }
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(onClick = onImport, enabled = !capturing, modifier = Modifier.fillMaxWidth()) { Text("Import image") }
+    }
+    BoxWithConstraints(modifier) {
+        if (maxWidth > maxHeight) {
+            Row(Modifier.fillMaxSize()) {
+                preview(Modifier.weight(1f).fillMaxHeight())
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.width(140.dp).align(Alignment.CenterVertically).verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                    shutter()
+                    OutlinedButton(onClick = onImport, enabled = !capturing, modifier = Modifier.fillMaxWidth()) { Text("Import image") }
+                }
+            }
+        } else {
+            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                preview(Modifier.weight(1f).fillMaxWidth())
+                Spacer(Modifier.height(16.dp))
+                shutter()
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(onClick = onImport, enabled = !capturing, modifier = Modifier.fillMaxWidth()) { Text("Import image") }
+            }
+        }
     }
 }

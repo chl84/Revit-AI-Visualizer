@@ -8,6 +8,7 @@ namespace RevitVisualizer.Windows;
 public sealed class CredentialStore(string root)
 {
     private readonly string path = Path.Combine(root, "openai-key.dpapi");
+    // Stable across product renames so remembered credentials remain decryptable.
     private static readonly byte[] entropy = Encoding.UTF8.GetBytes("Revit AI Visualizer / Windows credential / v1");
     public bool Exists => File.Exists(path);
 
@@ -47,6 +48,7 @@ public sealed class CredentialStore(string root)
 public sealed class SessionFiles : IDisposable
 {
     private readonly FileStream sessionLock;
+    // Preserve the original data location when upgrading to Vizruna.
     public static string DefaultRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Revit AI Visualizer");
     public string DirectoryPath { get; }
     public SessionFiles(string root)

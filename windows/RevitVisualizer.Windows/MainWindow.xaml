@@ -1,13 +1,13 @@
 <Window x:Class="RevitVisualizer.Windows.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:RevitVisualizer.Windows"
-        Title="Revit AI Visualizer" Width="1180" Height="800" MinWidth="860" MinHeight="620"
+        Title="Vizruna" Width="1180" Height="800" MinWidth="860" MinHeight="620"
         WindowStartupLocation="CenterScreen" Style="{StaticResource {x:Type Window}}">
   <Grid Margin="24">
     <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
     <Grid Grid.Row="0" Margin="0,0,0,20">
       <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
       <StackPanel>
-        <TextBlock Text="Revit AI Visualizer" FontSize="26" FontWeight="SemiBold" />
+        <TextBlock Text="Vizruna" FontSize="26" FontWeight="SemiBold" />
         <TextBlock x:Name="StageLabel" Text="1 / 3 · Capture" Foreground="{StaticResource Muted}" Margin="0,4,0,0" />
       </StackPanel>
       <Button x:Name="ClearKeyButton" Grid.Column="1" Content="Clear key" Click="ClearKey_Click" Visibility="Collapsed" VerticalAlignment="Center" />

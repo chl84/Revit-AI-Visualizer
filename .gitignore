@@ -25,6 +25,7 @@ captures/
 *.keystore
 keystore.properties
 signing.properties
+openai-credential.enc*
 *.pem
 *.p12
 *.log

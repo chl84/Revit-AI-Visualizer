@@ -23,9 +23,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -38,6 +41,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +51,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -59,6 +65,7 @@ import com.revitvisualizer.app.Stage
 import com.revitvisualizer.app.VisualizerViewModel
 import com.revitvisualizer.app.camera.CameraCapture
 import com.revitvisualizer.app.imaging.parseAspectRatio
+import com.revitvisualizer.app.imaging.LocalImage
 
 @Composable
 fun VisualizerApp(model: VisualizerViewModel = viewModel()) {
@@ -69,6 +76,12 @@ fun VisualizerApp(model: VisualizerViewModel = viewModel()) {
         surfaceVariant = Color(0xFF26302F), onSurfaceVariant = Color(0xFFAFBAB4),
     )) {
         val notifications = remember { SnackbarHostState() }
+        val view = LocalView.current
+        DisposableEffect(view, model.generating) {
+            val previous = view.keepScreenOn
+            if (model.generating) view.keepScreenOn = true
+            onDispose { view.keepScreenOn = previous }
+        }
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
             if (uri != null) model.import(uri)
         }
@@ -88,11 +101,13 @@ fun VisualizerApp(model: VisualizerViewModel = viewModel()) {
             Column(Modifier.fillMaxSize().padding(insets).padding(horizontal = 20.dp, vertical = 12.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Revit AI Visualizer", style = MaterialTheme.typography.titleLarge)
+                        Text("Vizruna", style = MaterialTheme.typography.titleLarge)
                         Text("${model.stage.ordinal + 1} / 3 · ${model.stage.name}",
                             style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    if (model.hasCredential) TextButton(onClick = model::clearCredential) { Text("Clear key") }
+                    if (model.hasCredential || model.hasSavedCredential) {
+                        TextButton(onClick = model::clearCredential, enabled = model.busy == null) { Text("Clear key") }
+                    }
                 }
                 Spacer(Modifier.height(20.dp))
                 when (model.stage) {
@@ -102,16 +117,8 @@ fun VisualizerApp(model: VisualizerViewModel = viewModel()) {
                             createFile = model::captureFile, onCaptured = model::acceptCapture,
                             onError = model::reportCameraError, onImport = import, modifier = Modifier.weight(1f),
                         )
-                        else {
-                            ImagePreview(image, Modifier.weight(1f).fillMaxWidth())
-                            Text("${image.width} × ${image.height} · Original preserved", style = MaterialTheme.typography.labelSmall)
-                            Spacer(Modifier.height(12.dp))
-                            Button(onClick = model::openPrepare, modifier = Modifier.fillMaxWidth()) { Text("Prepare image") }
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                                TextButton(onClick = model::retake) { Text("Retake") }
-                                TextButton(onClick = import) { Text("Import another image") }
-                            }
-                        }
+                        else CapturedImageReview(image, model::openPrepare, model::retake, import,
+                            Modifier.weight(1f).fillMaxWidth())
                     }
                     Stage.Prepare -> PrepareScreen(model, Modifier.weight(1f).fillMaxWidth())
                     Stage.Result -> {
@@ -142,6 +149,7 @@ fun VisualizerApp(model: VisualizerViewModel = viewModel()) {
             }
         }
         if (model.showCredentialDialog) CredentialDialog(onDismiss = model::dismissCredentialDialog, onSubmit = model::submitCredential)
+        model.failure?.let { FailureDialog(it, model::dismissFailure) }
         model.busy?.let { label ->
             Dialog(onDismissRequest = {}, properties = DialogProperties(
                 dismissOnBackPress = false, dismissOnClickOutside = false, securePolicy = SecureFlagPolicy.SecureOn,
@@ -160,6 +168,56 @@ fun VisualizerApp(model: VisualizerViewModel = viewModel()) {
             }
         }
     }
+}
+
+@Composable
+private fun CapturedImageReview(
+    image: LocalImage,
+    onPrepare: () -> Unit,
+    onRetake: () -> Unit,
+    onImport: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(modifier) {
+        if (maxWidth > maxHeight) {
+            Row(Modifier.fillMaxSize()) {
+                ImagePreview(image, Modifier.weight(1f).fillMaxHeight())
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.width(200.dp).align(Alignment.CenterVertically).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("${image.width} × ${image.height} · Original preserved", style = MaterialTheme.typography.labelSmall)
+                    Button(onClick = onPrepare, modifier = Modifier.fillMaxWidth()) { Text("Prepare image") }
+                    TextButton(onClick = onRetake, modifier = Modifier.fillMaxWidth()) { Text("Retake") }
+                    TextButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) { Text("Import another image") }
+                }
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                ImagePreview(image, Modifier.weight(1f).fillMaxWidth())
+                Text("${image.width} × ${image.height} · Original preserved", style = MaterialTheme.typography.labelSmall)
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onPrepare, modifier = Modifier.fillMaxWidth()) { Text("Prepare image") }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    TextButton(onClick = onRetake) { Text("Retake") }
+                    TextButton(onClick = onImport) { Text("Import another image") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FailureDialog(message: String, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Could not complete action") },
+        text = {
+            SelectionContainer {
+                Text(message, Modifier.verticalScroll(rememberScrollState()))
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 @Composable
@@ -224,28 +282,37 @@ private fun PrepareScreen(model: VisualizerViewModel, modifier: Modifier = Modif
 }
 
 @Composable
-private fun CredentialDialog(onDismiss: () -> Unit, onSubmit: (String) -> Unit) {
-    // Never use rememberSaveable, SavedStateHandle, preferences, or persistent storage for this field.
+fun CredentialDialog(onDismiss: () -> Unit, onSubmit: (String, Boolean) -> Unit) {
+    // Unsaved entry never enters saved-instance state. Persistence is an explicit device-local choice.
     var value by remember { mutableStateOf("") }
+    var rememberOnDevice by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = { value = ""; onDismiss() },
         properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
         title = { Text("OpenAI API key") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("For personal development and testing. Your key stays only in this app's memory until cleared or the app process ends.")
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("For personal development and testing. Enter your own OpenAI API key.")
                 OutlinedTextField(
                     value = value, onValueChange = { value = it }, label = { Text("API key") },
                     visualTransformation = PasswordVisualTransformation(), singleLine = true,
                     keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Password),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Row(Modifier.fillMaxWidth().toggleable(rememberOnDevice, role = Role.Checkbox,
+                    onValueChange = { rememberOnDevice = it }), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = rememberOnDevice, onCheckedChange = null)
+                    Text("Remember on this device")
+                }
+                Text(if (rememberOnDevice) "Stored encrypted on this device. Clear key removes the saved copy."
+                    else "Kept only in memory until the app closes. Turn on Remember on this device to reuse it next time.",
+                    style = MaterialTheme.typography.bodySmall)
                 Text("Visualize sends the prepared image to OpenAI and uses your API credits. Direct device access is not a secure distribution model for a public app.",
                     style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = {
-            Button(onClick = { val submitted = value; value = ""; onSubmit(submitted) }, enabled = value.isNotBlank()) { Text("Visualize") }
+            Button(onClick = { val submitted = value; value = ""; onSubmit(submitted, rememberOnDevice) }, enabled = value.isNotBlank()) { Text("Visualize") }
         },
         dismissButton = { TextButton(onClick = { value = ""; onDismiss() }) { Text("Cancel") } },
     )

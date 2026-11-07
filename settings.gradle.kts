@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Revit AI Visualizer"
+rootProject.name = "Vizruna"
 include(":app")

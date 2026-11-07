@@ -18,7 +18,7 @@ internal static class Program
         RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
         var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         application.Resources.MergedDictionaries.Add(new ResourceDictionary
-        { Source = new Uri("pack://application:,,,/Revit-AI-Visualizer;component/Theme.xaml", UriKind.Absolute) });
+        { Source = new Uri("pack://application:,,,/Vizruna;component/Theme.xaml", UriKind.Absolute) });
         application.DispatcherUnhandledException += (_, e) => { Console.Error.WriteLine(e.Exception.GetType().Name); e.Handled = true; application.Shutdown(1); };
         application.Startup += async (_, _) =>
         {
@@ -139,10 +139,10 @@ internal static class Program
                 {
                     process.Refresh();
                     if (process.HasExited) throw new Exception($"Published executable exited before opening a window (code {process.ExitCode}).");
-                    if (process.MainWindowHandle != 0 && process.MainWindowTitle == "Revit AI Visualizer") break;
+                    if (process.MainWindowHandle != 0 && process.MainWindowTitle == "Vizruna") break;
                     await Task.Delay(200);
                 }
-                process.Refresh(); True(process.MainWindowHandle != 0 && process.MainWindowTitle == "Revit AI Visualizer", "Published window did not appear.");
+                process.Refresh(); True(process.MainWindowHandle != 0 && process.MainWindowTitle == "Vizruna", "Published window did not appear.");
                 True(process.CloseMainWindow());
                 using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 await process.WaitForExitAsync(stop.Token); Equal(0, process.ExitCode);

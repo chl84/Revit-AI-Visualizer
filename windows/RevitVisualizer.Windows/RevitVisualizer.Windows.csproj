@@ -4,7 +4,7 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <AssemblyName>Revit-AI-Visualizer</AssemblyName>
+    <AssemblyName>Vizruna</AssemblyName>
     <RootNamespace>RevitVisualizer.Windows</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <PublishSingleFile>true</PublishSingleFile>

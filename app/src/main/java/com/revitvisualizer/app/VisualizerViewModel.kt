@@ -14,6 +14,8 @@ import com.revitvisualizer.app.imaging.parseAspectRatio
 import com.revitvisualizer.app.openai.ImageApiException
 import com.revitvisualizer.app.openai.OpenAiImages
 import com.revitvisualizer.app.storage.ImageStore
+import com.revitvisualizer.app.storage.DeviceCredentialStore
+import com.revitvisualizer.app.storage.CredentialStorageException
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
@@ -21,11 +23,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
 enum class Stage { Capture, Prepare, Result }
 
-class VisualizerViewModel(application: Application) : AndroidViewModel(application) {
+class VisualizerViewModel @JvmOverloads constructor(
+    application: Application,
+    private val credentialStore: DeviceCredentialStore = DeviceCredentialStore(application),
+) : AndroidViewModel(application) {
     private val store = ImageStore(application)
     private val api = OpenAiImages()
     private var credential: CharArray? = null
@@ -51,10 +57,27 @@ class VisualizerViewModel(application: Application) : AndroidViewModel(applicati
         private set
     var message by mutableStateOf<String?>(null)
         private set
+    var failure by mutableStateOf<String?>(null)
+        private set
     var hasCredential by mutableStateOf(false)
+        private set
+    var hasSavedCredential by mutableStateOf(credentialStore.hasSavedCredential)
         private set
     var showCredentialDialog by mutableStateOf(false)
         private set
+
+    init {
+        if (hasSavedCredential) runTask("Unlocking saved API key…") {
+            val saved = credentialStore.load()
+            try {
+                withContext(Dispatchers.Main.immediate) {
+                    ensureActive()
+                    credential = saved?.copyOf()
+                    hasCredential = credential != null
+                }
+            } finally { saved?.fill('\u0000') }
+        }
+    }
 
     fun captureFile() = store.captureFile()
 
@@ -106,6 +129,7 @@ class VisualizerViewModel(application: Application) : AndroidViewModel(applicati
     fun setAspect(value: String) { if (busy == null) aspectText = value.take(24) }
     fun resetSelection() { selection = Selection(); aspectText = ""; perspective = false }
     fun dismissMessage() { message = null }
+    fun dismissFailure() { failure = null }
     fun reportCameraError() { message = "The camera is unavailable. Check camera access or import an image." }
 
     fun visualize() {
@@ -116,23 +140,50 @@ class VisualizerViewModel(application: Application) : AndroidViewModel(applicati
 
     fun dismissCredentialDialog() { showCredentialDialog = false }
 
-    fun submitCredential(value: String) {
-        if (value.isBlank() || value.any { it.code !in 33..126 }) {
+    fun submitCredential(value: String, rememberOnDevice: Boolean = false) {
+        if (busy != null) return
+        if (value.isBlank() || value.length > 4096 || value.any { it.code !in 33..126 }) {
             message = "Enter a valid API key without spaces or line breaks."
             return
         }
-        credential?.fill('\u0000')
-        credential = value.toCharArray()
-        hasCredential = true
         showCredentialDialog = false
-        generate()
+        val submitted = value.toCharArray()
+        fun useCredential() {
+            credential?.fill('\u0000')
+            credential = submitted.copyOf()
+            hasCredential = true
+        }
+        if (!rememberOnDevice && !hasSavedCredential) {
+            try { useCredential() } finally { submitted.fill('\u0000') }
+            generate()
+        } else {
+            runTask("Updating saved API key…", onSuccess = ::generate) {
+                try {
+                    if (rememberOnDevice) credentialStore.save(submitted) else credentialStore.clear()
+                    withContext(Dispatchers.Main.immediate) {
+                        ensureActive()
+                        useCredential()
+                    }
+                } finally { submitted.fill('\u0000') }
+            }
+        }
     }
 
     fun clearCredential() {
+        if (busy != null && !generating) return
+        val previous = task
         if (generating) task?.cancel()
         credential?.fill('\u0000')
         credential = null
         hasCredential = false
+        showCredentialDialog = false
+        if (hasSavedCredential) viewModelScope.launch {
+            previous?.join()
+            runTask("Removing saved API key…") {
+                credentialStore.clear()
+                hasSavedCredential = false
+            }
+        }
     }
 
     private fun generate() {
@@ -151,8 +202,10 @@ class VisualizerViewModel(application: Application) : AndroidViewModel(applicati
             try {
                 val input = ImageProcessor.prepare(image, selected, aspect, inputFile)
                 ensureActive()
-                withContext(Dispatchers.Main) { busy = "Visualizing with GPT Image 2.6 Sunburst…" }
-                val output = api.edit(input, sessionCredential, outputFile)
+                val generationContext = coroutineContext
+                val output = api.edit(input, sessionCredential, outputFile) { phase ->
+                    if (generationContext.isActive) busy = phase.description
+                }
                 ensureActive()
                 val obsolete = listOfNotNull(prepared?.file, result?.file)
                 prepared = input
@@ -173,35 +226,41 @@ class VisualizerViewModel(application: Application) : AndroidViewModel(applicati
         val image = result ?: return
         runTask("Saving PNG…") {
             store.export(image)
-            message = "Image saved to Pictures / Revit AI Visualizer."
+            message = "Image saved to Pictures / Vizruna."
         }
     }
 
-    private fun runTask(label: String, work: suspend kotlinx.coroutines.CoroutineScope.() -> Unit) {
+    private fun runTask(label: String, onSuccess: () -> Unit = {}, work: suspend kotlinx.coroutines.CoroutineScope.() -> Unit) {
         if (busy != null) return
         busy = label
         message = null
+        failure = null
         task = viewModelScope.launch {
+            var completed = false
             try {
                 withContext(Dispatchers.IO, work)
+                completed = true
             } catch (error: CancellationException) {
                 message = if (generating) "Generation cancelled locally. OpenAI may still finish and bill a submitted request." else null
                 throw error
             } catch (error: Exception) {
                 // Never display raw network, provider, or filesystem errors.
-                message = when (error) {
+                failure = when (error) {
                     is ImageApiException -> error.message
+                    is CredentialStorageException -> error.message
                     is IllegalArgumentException -> safeValidationMessage(error)
                     is IOException -> "The image could not be read or saved. Check available storage and try again."
                     else -> "The operation could not be completed. Try another image."
                 }
             } catch (_: OutOfMemoryError) {
-                message = "There is not enough memory to process this image. Import a smaller image. The original is unchanged."
+                failure = "There is not enough memory to process this image. Import a smaller image. The original is unchanged."
             } finally {
                 generating = false
                 busy = null
                 task = null
+                hasSavedCredential = credentialStore.hasSavedCredential
             }
+            if (completed) onSuccess()
         }
     }
 
